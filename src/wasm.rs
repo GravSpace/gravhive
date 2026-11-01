@@ -121,4 +121,3 @@ impl Default for WasmPluginManager {
         Self::new()
     }
 }
-

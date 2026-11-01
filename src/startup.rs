@@ -1,5 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+
+#[cfg(not(target_os = "linux"))]
 use colored::*;
+
+#[cfg(target_os = "macos")]
+use anyhow::Context;
+#[cfg(target_os = "macos")]
 use std::fs;
 
 pub fn generate_startup_script() -> Result<()> {
