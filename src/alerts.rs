@@ -155,7 +155,13 @@ impl AlertManager {
                 }]
             });
 
-            if let Err(e) = self.client.post(&discord.webhook_url).json(&payload).send().await {
+            if let Err(e) = self
+                .client
+                .post(&discord.webhook_url)
+                .json(&payload)
+                .send()
+                .await
+            {
                 error!("Failed to send Discord alert: {}", e);
             } else {
                 debug!("Discord alert sent successfully");
@@ -168,7 +174,13 @@ impl AlertManager {
                 "text": format!("*{}*\n{}", title, message)
             });
 
-            if let Err(e) = self.client.post(&slack.webhook_url).json(&payload).send().await {
+            if let Err(e) = self
+                .client
+                .post(&slack.webhook_url)
+                .json(&payload)
+                .send()
+                .await
+            {
                 error!("Failed to send Slack alert: {}", e);
             } else {
                 debug!("Slack alert sent successfully");
@@ -203,4 +215,3 @@ impl AlertManager {
         }
     }
 }
-

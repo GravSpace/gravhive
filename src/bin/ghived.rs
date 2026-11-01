@@ -29,14 +29,16 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    info!("Starting Gravhive Daemon (ghived) v{}", gravhive::common::VERSION);
+    info!(
+        "Starting Gravhive Daemon (ghived) v{}",
+        gravhive::common::VERSION
+    );
 
     ensure_dirs().context("Failed to initialize Gravhive directories")?;
 
     // Write daemon PID
     let pid = std::process::id();
-    fs::write(pid_file_path(), pid.to_string())
-        .context("Failed to write PID file")?;
+    fs::write(pid_file_path(), pid.to_string()).context("Failed to write PID file")?;
 
     // Load alert configuration if available
     let mut alert_config = AlertConfig::default();
@@ -88,7 +90,9 @@ async fn main() -> Result<()> {
         }
 
         let mut mgr = manager_shutdown.write().await;
-        let _ = mgr.stop(&TargetSelector::All, Duration::from_millis(3000)).await;
+        let _ = mgr
+            .stop(&TargetSelector::All, Duration::from_millis(3000))
+            .await;
 
         let _ = fs::remove_file(pid_file_path());
         let _ = fs::remove_file(gravhive::common::socket_path());
@@ -96,12 +100,7 @@ async fn main() -> Result<()> {
     });
 
     // Run IPC server
-    let ipc_server = IpcServer::new(
-        manager,
-        log_hub,
-        Some(cron_manager),
-        Some(wasm_manager),
-    );
+    let ipc_server = IpcServer::new(manager, log_hub, Some(cron_manager), Some(wasm_manager));
     ipc_server.run().await?;
 
     Ok(())

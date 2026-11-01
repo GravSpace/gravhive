@@ -28,10 +28,7 @@ impl FileWatcher {
                 );
                 let mut mgr = manager.write().await;
                 let _ = mgr
-                    .restart(
-                        &TargetSelector::Name(app_name),
-                        Duration::from_millis(3000),
-                    )
+                    .restart(&TargetSelector::Name(app_name), Duration::from_millis(3000))
                     .await;
             }
         });

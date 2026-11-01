@@ -1,7 +1,5 @@
 use crate::alerts::{AlertEvent, AlertManager};
-use crate::model::{
-    ExecMode, LogEntry, ProcessConfig, ProcessItem, ProcessStatus, TargetSelector,
-};
+use crate::model::{ExecMode, LogEntry, ProcessConfig, ProcessItem, ProcessStatus, TargetSelector};
 use crate::process::worker::Worker;
 use crate::ring_buffer::LogHub;
 use anyhow::{bail, Context, Result};
@@ -39,8 +37,16 @@ impl ProcessManager {
 
         // If app already exists, delete old instances first
         if self.apps.contains_key(&app_name) {
-            info!("App '{}' already exists, stopping existing instances...", app_name);
-            let _ = self.delete(&TargetSelector::Name(app_name.clone()), Duration::from_millis(3000)).await;
+            info!(
+                "App '{}' already exists, stopping existing instances...",
+                app_name
+            );
+            let _ = self
+                .delete(
+                    &TargetSelector::Name(app_name.clone()),
+                    Duration::from_millis(3000),
+                )
+                .await;
         }
 
         let instances = match config.exec_mode {
@@ -74,7 +80,10 @@ impl ProcessManager {
             );
 
             if let Err(e) = worker.spawn().await {
-                error!("Failed to spawn worker #{} for app '{}': {}", id, app_name, e);
+                error!(
+                    "Failed to spawn worker #{} for app '{}': {}",
+                    id, app_name, e
+                );
                 worker.status = ProcessStatus::Errored;
             } else {
                 started_ids.push(id);
@@ -133,7 +142,10 @@ impl ProcessManager {
         let mut reloaded_count = 0;
 
         for (old_id, app_name, instance_idx, config) in target_workers {
-            info!("Rolling reload: spawning new worker for app '{}' (index {})", app_name, instance_idx);
+            info!(
+                "Rolling reload: spawning new worker for app '{}' (index {})",
+                app_name, instance_idx
+            );
 
             // 1. Spawn new worker
             let new_id = self.next_id;
@@ -224,7 +236,10 @@ impl ProcessManager {
             .collect()
     }
 
-    pub fn describe(&self, target: &TargetSelector) -> Option<(ProcessItem, ProcessConfig, Vec<String>)> {
+    pub fn describe(
+        &self,
+        target: &TargetSelector,
+    ) -> Option<(ProcessItem, ProcessConfig, Vec<String>)> {
         let worker = self.workers.iter().find(|w| matches_target(w, target))?;
         let item = ProcessItem {
             id: worker.id,
@@ -270,12 +285,13 @@ impl ProcessManager {
                             });
                         }
 
-                        if worker.config.autorestart && worker.restarts < worker.config.max_restarts {
+                        if worker.config.autorestart && worker.restarts < worker.config.max_restarts
+                        {
                             worker.restarts += 1;
                             worker.status = ProcessStatus::Restarting;
 
                             // Exponential backoff with jitter
-                            let backoff_factor = (worker.restarts as u32).min(6);
+                            let backoff_factor = worker.restarts.min(6);
                             let delay_ms = (100u64 * 2u64.pow(backoff_factor)).min(10000);
 
                             info!(
@@ -290,7 +306,10 @@ impl ProcessManager {
                                 app_name: app_name.clone(),
                                 worker_id,
                                 stream: "err".to_string(),
-                                message: format!("Process crashed (exit: {}). Restarting in {}ms...", status, delay_ms),
+                                message: format!(
+                                    "Process crashed (exit: {}). Restarting in {}ms...",
+                                    status, delay_ms
+                                ),
                             });
 
                             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -311,7 +330,10 @@ impl ProcessManager {
                         // Still running healthy
                     }
                     Err(e) => {
-                        error!("[app: {}] Error polling worker #{}: {}", worker.app_name, worker.id, e);
+                        error!(
+                            "[app: {}] Error polling worker #{}: {}",
+                            worker.app_name, worker.id, e
+                        );
                     }
                 }
             }

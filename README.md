@@ -1,5 +1,9 @@
 # Gravhive (`ghive`) 🚀
 
+[![CI](https://github.com/your-org/GravHive/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/GravHive/actions/workflows/ci.yml)
+[![Release](https://github.com/your-org/GravHive/actions/workflows/release.yml/badge.svg)](https://github.com/your-org/GravHive/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 > **Next-Generation High-Performance Production Process Manager in Rust**  
 > Terinspirasi dari PM2, dibangun dari awal dengan 100% Rust untuk keandalan produksi, zero GC overhead, footprint memori minimal, dan dukungan multi-runtime universal.
 
@@ -29,10 +33,58 @@
 - **Zero-Downtime Deployment Workflow:** Pipeline deployment multi-tahap (`ghive deploy <env>`) dengan pre-deploy hook, git pull, post-deploy hook, dan rollback alert.
 - **Socket Activation & Scale-to-Zero:** Menghemat konsumsi RAM hingga 100% pada aplikasi idle dengan menahan port TCP dan menyalakan worker secara instan hanya saat ada koneksi masuk.
 - **Extensible WASM Plugin System:** Menjalankan ekstensi pihak ketiga secara aman dalam WebAssembly sandbox (`wasmi`) dari file `.wasm` / `.wat` (`ghive plugins`).
+- **Multi-Server Mesh & Centralized Management (`ghive mesh`):** Hubungkan banyak server Gravhive ke dalam jaringan mesh terpadu. Pantau agregat proses dan kesehatan CPU/RAM seluruh node dari satu terminal pusat.
+- **In-Memory Secret Vault & AES-256-GCM Encryption (`ghive secrets`):** Enkripsi kuat untuk file konfigurasi `.env` (`.env.enc`) dan vault terenkripsi dengan penyamaran otomatis (*credential redaction*) di log dan `describe`.
+- **On-Demand CPU & Memory Profiling (`ghive profile`):** Generator *interactive SVG Flamegraph* bawaan tanpa dependensi luar untuk mendiagnosis bottleneck CPU dan memory leak pada aplikasi produksi secara real-time.
 
 ---
 
 ## 🛠️ Instalasi & Kompilasi
+
+### 1. Instalasi Otomatis (Linux Installer) 🐧
+
+Gunakan skrip installer otomatis untuk Linux (Ubuntu, Debian, CentOS, RHEL, Fedora, Arch, Alpine, dll.):
+
+```bash
+# Jalankan installer otomatis (mendukung system-wide sudo atau user-mode ~/.local/bin)
+bash install.sh
+```
+
+**Fitur installer Linux (`install.sh`):**
+- Mendeteksi arsitektur CPU (`x86_64`, `aarch64` / `arm64`).
+- Memeriksa ketersediaan Linux **cgroups v2** untuk fitur isolasi memori & CPU.
+- Menginstal biner `ghive` dan `ghived` ke `/usr/local/bin` (atau `~/.local/bin`).
+- Mengonfigurasi, mengaktifkan, dan menyalakan systemd service otomatis (`/etc/systemd/system/gravhive.service`).
+- Inisialisasi direktori runtime `~/.gravhive/` (logs & plugins).
+
+Untuk menghapus instalasi (*uninstall*):
+```bash
+bash install.sh --uninstall
+# atau
+bash scripts/uninstall.sh
+```
+
+---
+
+### 2. Download Pre-Built Binary dari GitHub Releases 📦
+
+Setiap rilis tag (misal `v0.1.0`) otomatis dikompilasi oleh GitHub Actions CI/CD menjadi arsip biner native:
+
+```bash
+# Unduh arsip sesuai target OS/arsitektur CPU Anda dari GitHub Releases:
+# - Linux x86_64: gravhive-x86_64-unknown-linux-gnu.tar.gz
+# - Linux ARM64:  gravhive-aarch64-unknown-linux-gnu.tar.gz
+# - macOS Apple Silicon: gravhive-aarch64-apple-darwin.tar.gz
+# - macOS Intel: gravhive-x86_64-apple-darwin.tar.gz
+
+tar -xzvf gravhive-x86_64-unknown-linux-gnu.tar.gz
+cd gravhive-x86_64-unknown-linux-gnu
+sudo ./install.sh
+```
+
+---
+
+### 3. Kompilasi Manual dari Source
 
 ### Persyaratan
 - Rust toolchain (v1.75+)
@@ -160,6 +212,58 @@ ghive cron
 ```bash
 # Melihat daftar plugin WASM yang aktif di ~/.gravhive/plugins/
 ghive plugins
+```
+
+### 11. In-Memory Secret Vault & Enkripsi Environment (`ghive secrets`)
+```bash
+# Menyimpan secret terenkripsi (AES-256-GCM)
+ghive secrets set DATABASE_URL "postgres://app:s3cr3t@db.prod.internal:5432/main"
+ghive secrets set STRIPE_KEY "sk_live_998877665544332211"
+
+# Menampilkan daftar secret tersimpan (nilai otomatis disamarkan)
+ghive secrets list
+
+# Mengambil secret spesifik
+ghive secrets get DATABASE_URL
+
+# Mengenkripsi file plaintext .env menjadi .env.enc
+ghive secrets encrypt .env --output .env.enc
+
+# Mendekripsi .env.enc ke terminal
+ghive secrets decrypt .env.enc
+
+# Otomatis: Setiap kredensial yang terdaftar di vault akan otomatis disamarkan [REDACTED]
+# pada keluaran `ghive describe` dan streaming log aplikasi.
+```
+
+### 12. Multi-Server Mesh & Centralized Management (`ghive mesh`)
+```bash
+# 1. Pada Server Coordinator (Master Node):
+# Menjalankan Mesh Coordinator listener
+ghive mesh init --port 9443 --token "cluster-secret-key"
+
+# 2. Pada Worker Node (Server Cabang / Slave):
+# Menghubungkan daemon lokal ke coordinator
+ghive mesh join 192.168.1.10:9443 --token "cluster-secret-key" --name "worker-node-1"
+
+# 3. Dari terminal mana saja (Query Cluster):
+# Melihat status dan kesehatan CPU/RAM seluruh node dalam mesh
+ghive mesh nodes --coordinator 192.168.1.10:9443 --token "cluster-secret-key"
+
+# Melihat daftar agregat seluruh proses aplikasi di semua server
+ghive mesh list --coordinator 192.168.1.10:9443 --token "cluster-secret-key"
+```
+
+### 13. On-Demand CPU & Memory Profiling (`ghive profile`)
+```bash
+# Sampling CPU aplikasi selama 10 detik dan menghasilkan file SVG Flamegraph interaktif
+ghive profile api-gateway --duration 10 --output flamegraph-cpu.svg
+
+# Profiling alokasi memori aplikasi
+ghive profile bun-web --duration 5 --mode memory --output flamegraph-memory.svg
+
+# File SVG yang dihasilkan dapat langsung dibuka di browser web apa pun (Chrome, Safari, Firefox)
+# dengan fitur interaktif: zoom in/out frame alokasi, pencarian stack trace, dan hover info.
 ```
 
 ---

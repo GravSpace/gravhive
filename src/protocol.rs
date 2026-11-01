@@ -1,3 +1,5 @@
+#![allow(clippy::large_enum_variant)]
+
 use crate::cron::CronJobInfo;
 use crate::model::{LogEntry, LogStreamType, ProcessConfig, ProcessItem, TargetSelector};
 use crate::wasm::PluginInfo;
@@ -57,4 +59,3 @@ pub enum Response {
         message: String,
     },
 }
-

@@ -42,7 +42,7 @@ impl LogHub {
             }
         });
         let total = iter.clone().count();
-        let skip = if total > limit { total - limit } else { 0 };
+        let skip = total.saturating_sub(limit);
         iter.skip(skip).cloned().collect()
     }
 
@@ -55,4 +55,3 @@ impl LogHub {
         buf.clear();
     }
 }
-

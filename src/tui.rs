@@ -1,5 +1,7 @@
 use crate::ipc::IpcClient;
-use crate::model::{format_duration, format_memory_bytes, ProcessItem, ProcessStatus, TargetSelector};
+use crate::model::{
+    format_duration, format_memory_bytes, ProcessItem, ProcessStatus, TargetSelector,
+};
 use crate::protocol::{Request, Response};
 use anyhow::Result;
 use crossterm::{
@@ -172,7 +174,9 @@ fn render_ui(
         Span::raw(" | Active: "),
         Span::styled(
             format!("{}/{}", active_count, processes.len()),
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" | Total Memory: "),
         Span::styled(
@@ -238,8 +242,11 @@ fn render_ui(
         ],
     )
     .header(
-        Row::new(vec!["ID", "NAME", "STATUS", "CPU", "MEM"])
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Row::new(vec!["ID", "NAME", "STATUS", "CPU", "MEM"]).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
     )
     .block(Block::default().borders(Borders::ALL).title(" Processes "));
 
@@ -272,14 +279,23 @@ fn render_ui(
                 Span::raw("Uptime: "),
                 Span::raw(format_duration(sel_proc.uptime_secs)),
                 Span::raw(" | Restarts: "),
-                Span::styled(sel_proc.restarts.to_string(), Style::default().fg(Color::Red)),
+                Span::styled(
+                    sel_proc.restarts.to_string(),
+                    Style::default().fg(Color::Red),
+                ),
                 Span::raw(" | Mem: "),
-                Span::styled(format_memory_bytes(sel_proc.memory_bytes), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format_memory_bytes(sel_proc.memory_bytes),
+                    Style::default().fg(Color::Yellow),
+                ),
             ]),
         ];
 
-        let detail_p = Paragraph::new(detail_text)
-            .block(Block::default().borders(Borders::ALL).title(" Process Metadata "));
+        let detail_p = Paragraph::new(detail_text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Process Metadata "),
+        );
 
         let detail_split = Layout::default()
             .direction(Direction::Vertical)
@@ -289,8 +305,11 @@ fn render_ui(
         f.render_widget(detail_p, detail_split[0]);
         f.render_widget(cpu_gauge, detail_split[1]);
     } else {
-        let empty = Paragraph::new("No processes active")
-            .block(Block::default().borders(Borders::ALL).title(" Process Metadata "));
+        let empty = Paragraph::new("No processes active").block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Process Metadata "),
+        );
         f.render_widget(empty, right_chunks[0]);
     }
 
@@ -308,7 +327,10 @@ fn render_ui(
 
     // 3. Footer: Shortcuts
     let footer_text = if !status_msg.is_empty() {
-        format!("INFO: {} | [↑/↓] Select | [R] Restart | [S] Stop | [D] Delete | [Q] Quit", status_msg)
+        format!(
+            "INFO: {} | [↑/↓] Select | [R] Restart | [S] Stop | [D] Delete | [Q] Quit",
+            status_msg
+        )
     } else {
         "[↑/↓] Select Process | [R] Restart | [S] Stop | [D] Delete | [Q] Quit".to_string()
     };

@@ -65,8 +65,8 @@ pub fn parse_config_file(path: &Path) -> Result<Vec<ProcessConfig>> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let configs: Vec<ProcessConfig> = match ext.to_lowercase().as_str() {
         "json" => {
-            let eco: EcosystemConfig = serde_json::from_str(&content)
-                .with_context(|| "Failed to parse JSON config")?;
+            let eco: EcosystemConfig =
+                serde_json::from_str(&content).with_context(|| "Failed to parse JSON config")?;
             convert_ecosystem_to_configs(eco, path.parent())?
         }
         "yaml" | "yml" => {
@@ -77,8 +77,8 @@ pub fn parse_config_file(path: &Path) -> Result<Vec<ProcessConfig>> {
         }
         _ => {
             // Default TOML
-            let eco: EcosystemConfig = toml::from_str(&content)
-                .with_context(|| "Failed to parse TOML config")?;
+            let eco: EcosystemConfig =
+                toml::from_str(&content).with_context(|| "Failed to parse TOML config")?;
             convert_ecosystem_to_configs(eco, path.parent())?
         }
     };
@@ -180,7 +180,14 @@ fn convert_single_app(single: SingleAppConfig, base_dir: Option<&Path>) -> Resul
     })
 }
 
-pub fn load_ecosystem(path: &Path) -> Result<(Vec<ProcessConfig>, Option<AlertConfig>, HashMap<String, DeployTarget>)> {
+#[allow(clippy::type_complexity)]
+pub fn load_ecosystem(
+    path: &Path,
+) -> Result<(
+    Vec<ProcessConfig>,
+    Option<AlertConfig>,
+    HashMap<String, DeployTarget>,
+)> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read configuration file: {}", path.display()))?;
 
@@ -201,7 +208,8 @@ pub fn load_ecosystem(path: &Path) -> Result<(Vec<ProcessConfig>, Option<AlertCo
 
 pub fn generate_ecosystem_template(format: &str) -> &'static str {
     match format.to_lowercase().as_str() {
-        "json" => r#"{
+        "json" => {
+            r#"{
   "apps": [
     {
       "name": "web-api",
@@ -227,8 +235,10 @@ pub fn generate_ecosystem_template(format: &str) -> &'static str {
       }
     }
   ]
-}"#,
-        "yaml" | "yml" => r#"apps:
+}"#
+        }
+        "yaml" | "yml" => {
+            r#"apps:
   - name: web-api
     script: app.js
     instances: max
@@ -245,8 +255,10 @@ pub fn generate_ecosystem_template(format: &str) -> &'static str {
     exec_mode: fork
     instances: 1
     autorestart: true
-"#,
-        _ => r#"# Gravhive Ecosystem Configuration File (ghive.toml)
+"#
+        }
+        _ => {
+            r#"# Gravhive Ecosystem Configuration File (ghive.toml)
 # Run with: ghive start ghive.toml
 
 # --- Applications ---
@@ -301,7 +313,7 @@ path = "/var/www/my-app"
 ref = "origin/main"
 pre_deploy = "echo 'Starting deployment...'"
 post_deploy = "npm install && npm run build && ghive reload all"
-"#,
+"#
+        }
     }
 }
-

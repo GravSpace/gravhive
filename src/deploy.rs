@@ -36,7 +36,11 @@ impl DeployManager {
         );
         println!("{}", "─".repeat(60).cyan());
 
-        let is_local = target.host.as_deref().unwrap_or("local").eq_ignore_ascii_case("local")
+        let is_local = target
+            .host
+            .as_deref()
+            .unwrap_or("local")
+            .eq_ignore_ascii_case("local")
             || target.host.as_deref().unwrap_or("") == "127.0.0.1";
 
         let result = if is_local {
@@ -47,7 +51,11 @@ impl DeployManager {
 
         match &result {
             Ok(_) => {
-                println!("\n{} Deployment to '{}' succeeded!", "✓".green().bold(), env_name);
+                println!(
+                    "\n{} Deployment to '{}' succeeded!",
+                    "✓".green().bold(),
+                    env_name
+                );
                 if let Some(alerts) = alert_mgr {
                     alerts.send(AlertEvent::DeployResult {
                         environment: env_name.to_string(),
@@ -57,7 +65,12 @@ impl DeployManager {
                 }
             }
             Err(e) => {
-                eprintln!("\n{} Deployment to '{}' failed: {}", "✗".red().bold(), env_name, e);
+                eprintln!(
+                    "\n{} Deployment to '{}' failed: {}",
+                    "✗".red().bold(),
+                    env_name,
+                    e
+                );
                 if let Some(alerts) = alert_mgr {
                     alerts.send(AlertEvent::DeployResult {
                         environment: env_name.to_string(),
@@ -76,13 +89,17 @@ impl DeployManager {
 
         // 1. Pre-deploy hook
         if let Some(ref pre) = target.pre_deploy {
-            println!("{} Running pre-deploy hook: {}", "⚡".yellow(), pre.dimmed());
+            println!(
+                "{} Running pre-deploy hook: {}",
+                "⚡".yellow(),
+                pre.dimmed()
+            );
             let status = Command::new("sh")
                 .arg("-c")
                 .arg(pre)
                 .current_dir(work_dir)
                 .status()
-                .with_context(|| format!("Failed to run pre-deploy hook"))?;
+                .with_context(|| "Failed to run pre-deploy hook".to_string())?;
             if !status.success() {
                 bail!("Pre-deploy hook exited with status: {}", status);
             }
@@ -90,7 +107,11 @@ impl DeployManager {
 
         // 2. Git Pull / Checkout
         if target.repo.is_some() {
-            println!("{} Fetching and checking out git ref: {}", "📦".cyan(), target.git_ref.bold());
+            println!(
+                "{} Fetching and checking out git ref: {}",
+                "📦".cyan(),
+                target.git_ref.bold()
+            );
             let git_cmd = format!(
                 "git fetch --all && git checkout {} && git pull",
                 target.git_ref
@@ -108,13 +129,17 @@ impl DeployManager {
 
         // 3. Post-deploy hook
         if let Some(ref post) = target.post_deploy {
-            println!("{} Running post-deploy hook: {}", "⚡".yellow(), post.dimmed());
+            println!(
+                "{} Running post-deploy hook: {}",
+                "⚡".yellow(),
+                post.dimmed()
+            );
             let status = Command::new("sh")
                 .arg("-c")
                 .arg(post)
                 .current_dir(work_dir)
                 .status()
-                .with_context(|| format!("Failed to run post-deploy hook"))?;
+                .with_context(|| "Failed to run post-deploy hook".to_string())?;
             if !status.success() {
                 bail!("Post-deploy hook exited with status: {}", status);
             }
@@ -149,7 +174,12 @@ impl DeployManager {
             remote_script.push_str(&format!(" && {}", post));
         }
 
-        println!("{} Connecting via SSH to {}: {}", "🔗".cyan(), ssh_target.bold(), remote_script.dimmed());
+        println!(
+            "{} Connecting via SSH to {}: {}",
+            "🔗".cyan(),
+            ssh_target.bold(),
+            remote_script.dimmed()
+        );
 
         let status = Command::new("ssh")
             .arg(&ssh_target)
@@ -164,4 +194,3 @@ impl DeployManager {
         Ok(())
     }
 }
-

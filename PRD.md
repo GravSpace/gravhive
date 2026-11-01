@@ -439,9 +439,13 @@ max_restarts = 10
 ### 7.1 Keamanan (Security)
 - **Privilege Dropping:** Daemon dapat dijalankan sebagai root (untuk `SO_REUSEPORT` atau binding port `< 1024`), namun worker anak dapat secara otomatis diturunkan ke pengguna non-root (`user: "www-data"` / `setuid`).
 - **IPC Access Control:** Socket file UNIX (`ghive.sock`) diberi permission ketat (`0600` atau `0660` dengan grup terverifikasi) untuk mencegah pengguna lokal yang tidak memiliki hak akses mengontrol proses server.
-- **Environment Sanitization:** Proteksi terhadap *leakage* variabel sensitif antar worker.
+- **In-Memory Secret Vault & Kredensial Terenkripsi (AES-256-GCM):** File lingkungan sensitif (`.env.enc`) dan variabel rahasia dienkripsi dengan authenticated cipher AES-256-GCM. Nilai kredensial otomatis disamarkan (`[REDACTED]`) di seluruh log preview dan inspeksi CLI (`ghive describe`).
+- **Multi-Server Mesh Authentication:** Komunikasi antar-node dalam kluster diamankan menggunakan token bersama (*Cluster Secret Token*) dan streaming TCP terverifikasi.
 
-### 7.2 Keandalan & Robustness (Reliability)
+### 7.2 Profiling & Observabilitas Lanjutan
+- **Zero-Dependency Flamegraph Generator:** Pengambilan sampel CPU dan alokasi memori proses target secara on-demand berbasis `sysinfo` dan `inferno` untuk merender berkas interaktif SVG Flamegraph tanpa membutuhkan instalasi `perf` eksternal.
+
+### 7.3 Keandalan & Robustness (Reliability)
 - **Immortal Daemon:** Daemon harus menangani semua error internal secara terstruktur (`Result<T, E>`) tanpa pernah memicu *uncontrolled panic*.
 - **Zombie Process Reaping:** Dalam mode container, daemon secara aktif melakukan loop `waitpid(-1, WNOHANG)` untuk mencegah resource leak akibat zombie process dari proses turunan (misal `child_process.fork()` di Node.js yang orphaned).
 

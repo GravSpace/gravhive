@@ -181,11 +181,119 @@ enum Commands {
     /// List active WebAssembly (WASM) plugins
     Plugins,
 
+    /// Manage encrypted secrets and environment variables (AES-256-GCM)
+    Secrets {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
+
+    /// Manage multi-server cluster mesh
+    Mesh {
+        #[command(subcommand)]
+        action: MeshAction,
+    },
+
+    /// Profile CPU or memory of a process and generate an interactive SVG Flamegraph
+    Profile {
+        /// Target application name or process ID
+        target: String,
+
+        /// Duration of profiling in seconds (default: 10)
+        #[arg(short, long, default_value = "10")]
+        duration: u64,
+
+        /// Output path for interactive SVG Flamegraph
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Profiling mode: cpu or memory (default: cpu)
+        #[arg(short, long, default_value = "cpu")]
+        mode: String,
+    },
+
     /// Stop the Gravhive background daemon
     Kill,
 
     /// Check daemon status and connection
     Ping,
+}
+
+#[derive(Subcommand)]
+pub enum SecretAction {
+    /// Store an encrypted secret key-value pair
+    Set { key: String, value: String },
+
+    /// Retrieve and decrypt a secret by key
+    Get { key: String },
+
+    /// List all stored secret keys (with masked values)
+    List,
+
+    /// Encrypt a plaintext .env file into .env.enc using AES-256-GCM
+    Encrypt {
+        /// Path to input .env file
+        input: PathBuf,
+
+        /// Path to output encrypted file (default: input with .env.enc)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Decrypt a .env.enc file to stdout
+    Decrypt {
+        /// Path to encrypted .env.enc file
+        input: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MeshAction {
+    /// Start a Mesh Coordinator on this server to connect multiple nodes
+    Init {
+        /// Listening port (default: 9443)
+        #[arg(short, long, default_value = "9443")]
+        port: u16,
+
+        /// Cluster secret token
+        #[arg(short, long)]
+        token: Option<String>,
+    },
+
+    /// Join this Gravhive daemon to a remote Mesh Coordinator
+    Join {
+        /// Coordinator address (e.g. 192.168.1.10:9443)
+        coordinator: String,
+
+        /// Cluster secret token
+        #[arg(short, long)]
+        token: String,
+
+        /// Node name identifier (default: hostname)
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+
+    /// List all connected server nodes and their health in the mesh
+    Nodes {
+        /// Coordinator address (default: 127.0.0.1:9443)
+        #[arg(short, long, default_value = "127.0.0.1:9443")]
+        coordinator: String,
+
+        /// Cluster secret token
+        #[arg(short, long)]
+        token: Option<String>,
+    },
+
+    /// View unified process list across all servers in the mesh
+    List {
+        /// Coordinator address (default: 127.0.0.1:9443)
+        #[arg(short, long, default_value = "127.0.0.1:9443")]
+        coordinator: String,
+
+        /// Cluster secret token
+        #[arg(short, long)]
+        token: Option<String>,
+    },
 }
 
 fn parse_key_val(s: &str) -> Result<(String, String), String> {
@@ -225,11 +333,18 @@ async fn main() -> Result<()> {
             remove_startup_script()?;
             return Ok(());
         }
-        Commands::Deploy { environment, config } => {
+        Commands::Deploy {
+            environment,
+            config,
+        } => {
             let (_, alerts, targets) = gravhive::config::load_ecosystem(&config)?;
             let alert_mgr = alerts.map(gravhive::alerts::AlertManager::new);
             if let Some(target) = targets.get(&environment) {
-                gravhive::deploy::DeployManager::execute_deploy(&environment, target, alert_mgr.as_ref())?;
+                gravhive::deploy::DeployManager::execute_deploy(
+                    &environment,
+                    target,
+                    alert_mgr.as_ref(),
+                )?;
             } else {
                 eprintln!(
                     "{} Environment '{}' not found in {}",
@@ -237,6 +352,190 @@ async fn main() -> Result<()> {
                     environment,
                     config.display()
                 );
+            }
+            return Ok(());
+        }
+        Commands::Secrets { action } => {
+            match action {
+                SecretAction::Set { key, value } => {
+                    gravhive::vault::SecretVault::set_secret(&key, &value)?;
+                    println!(
+                        "{} Secret '{}' stored securely in vault (AES-256-GCM)",
+                        "✓".green().bold(),
+                        key.bold()
+                    );
+                }
+                SecretAction::Get { key } => {
+                    match gravhive::vault::SecretVault::get_secret(&key)? {
+                        Some(val) => println!("{}", val),
+                        None => {
+                            eprintln!("{} Secret '{}' not found in vault", "✗".red().bold(), key)
+                        }
+                    }
+                }
+                SecretAction::List => {
+                    let secrets = gravhive::vault::SecretVault::list_secrets()?;
+                    if secrets.is_empty() {
+                        println!("\nNo secrets stored in vault.\nUse `ghive secrets set <KEY> <VALUE>` to store one.\n");
+                    } else {
+                        let mut table = Table::new();
+                        table
+                            .load_preset(UTF8_ROUND_CORNERS)
+                            .set_content_arrangement(ContentArrangement::Dynamic)
+                            .set_header(vec![
+                                Cell::new("secret key").fg(TableColor::Cyan),
+                                Cell::new("masked value").fg(TableColor::Cyan),
+                                Cell::new("status").fg(TableColor::Cyan),
+                            ]);
+                        for (k, masked) in secrets {
+                            table.add_row(vec![
+                                Cell::new(k),
+                                Cell::new(masked),
+                                Cell::new("encrypted (aes-256-gcm)").fg(TableColor::Green),
+                            ]);
+                        }
+                        println!("\n{}\n", table);
+                    }
+                }
+                SecretAction::Encrypt { input, output } => {
+                    let out_path = output.unwrap_or_else(|| {
+                        let mut path = input.clone();
+                        path.set_extension("env.enc");
+                        path
+                    });
+                    gravhive::vault::SecretVault::encrypt_env_file(&input, &out_path)?;
+                    println!(
+                        "{} Encrypted {} to {}",
+                        "✓".green().bold(),
+                        input.display(),
+                        out_path.display()
+                    );
+                }
+                SecretAction::Decrypt { input } => {
+                    let text = gravhive::vault::SecretVault::decrypt_env_file(&input)?;
+                    print!("{}", text);
+                }
+            }
+            return Ok(());
+        }
+        Commands::Mesh {
+            action: MeshAction::Init { port, token },
+        } => {
+            let secret_token = token.unwrap_or_else(|| "ghive-mesh-token".to_string());
+            println!(
+                "{} Starting Gravhive Mesh Coordinator on port {}...",
+                "●".cyan().bold(),
+                port
+            );
+            println!("  Cluster Token: {}", secret_token.bold());
+            println!(
+                "  Worker nodes can join with: ghive mesh join <COORDINATOR_IP>:{} --token {}",
+                port, secret_token
+            );
+            let coordinator = gravhive::mesh::MeshCoordinator::new(port, secret_token);
+            coordinator.run().await?;
+            return Ok(());
+        }
+        Commands::Mesh {
+            action: MeshAction::Nodes { coordinator, token },
+        } => {
+            let secret_token = token.unwrap_or_else(|| "ghive-mesh-token".to_string());
+            let nodes = gravhive::mesh::MeshAgent::query_nodes(&coordinator, &secret_token).await?;
+            if nodes.is_empty() {
+                println!(
+                    "\nNo worker nodes currently registered on coordinator {}\n",
+                    coordinator
+                );
+            } else {
+                let mut table = Table::new();
+                table
+                    .load_preset(UTF8_ROUND_CORNERS)
+                    .set_content_arrangement(ContentArrangement::Dynamic)
+                    .set_header(vec![
+                        Cell::new("node id").fg(TableColor::Cyan),
+                        Cell::new("hostname").fg(TableColor::Cyan),
+                        Cell::new("address").fg(TableColor::Cyan),
+                        Cell::new("os").fg(TableColor::Cyan),
+                        Cell::new("cpu").fg(TableColor::Cyan),
+                        Cell::new("memory").fg(TableColor::Cyan),
+                        Cell::new("procs").fg(TableColor::Cyan),
+                        Cell::new("last seen").fg(TableColor::Cyan),
+                        Cell::new("status").fg(TableColor::Cyan),
+                    ]);
+                for n in nodes {
+                    let status_cell = if n.status == "online" {
+                        Cell::new("online").fg(TableColor::Green)
+                    } else {
+                        Cell::new("offline").fg(TableColor::Red)
+                    };
+                    table.add_row(vec![
+                        Cell::new(n.id),
+                        Cell::new(n.name),
+                        Cell::new(n.address),
+                        Cell::new(n.os),
+                        Cell::new(format!("{:.1}%", n.cpu_percent)),
+                        Cell::new(format_memory_bytes(n.memory_bytes)),
+                        Cell::new(n.processes_count),
+                        Cell::new(n.last_seen.format("%H:%M:%S").to_string()),
+                        status_cell,
+                    ]);
+                }
+                println!("\n{}\n", table);
+            }
+            return Ok(());
+        }
+        Commands::Mesh {
+            action: MeshAction::List { coordinator, token },
+        } => {
+            let secret_token = token.unwrap_or_else(|| "ghive-mesh-token".to_string());
+            let map =
+                gravhive::mesh::MeshAgent::query_all_processes(&coordinator, &secret_token).await?;
+            if map.is_empty() {
+                println!("\nNo active processes reported across cluster mesh.\n");
+            } else {
+                for (node_name, processes) in map {
+                    println!("\n{} Node: {}", "●".cyan().bold(), node_name.bold());
+                    if processes.is_empty() {
+                        println!("  (No active processes)");
+                    } else {
+                        let mut table = Table::new();
+                        table
+                            .load_preset(UTF8_ROUND_CORNERS)
+                            .set_content_arrangement(ContentArrangement::Dynamic)
+                            .set_header(vec![
+                                Cell::new("id").fg(TableColor::Cyan),
+                                Cell::new("name").fg(TableColor::Cyan),
+                                Cell::new("pid").fg(TableColor::Cyan),
+                                Cell::new("status").fg(TableColor::Cyan),
+                                Cell::new("cpu").fg(TableColor::Cyan),
+                                Cell::new("memory").fg(TableColor::Cyan),
+                                Cell::new("uptime").fg(TableColor::Cyan),
+                            ]);
+                        for p in processes {
+                            let status_cell = match p.status {
+                                ProcessStatus::Online => Cell::new("online").fg(TableColor::Green),
+                                ProcessStatus::Stopping | ProcessStatus::Restarting => {
+                                    Cell::new(format!("{:?}", p.status)).fg(TableColor::Yellow)
+                                }
+                                ProcessStatus::Stopped => {
+                                    Cell::new("stopped").fg(TableColor::DarkGrey)
+                                }
+                                ProcessStatus::Errored => Cell::new("errored").fg(TableColor::Red),
+                            };
+                            table.add_row(vec![
+                                Cell::new(p.id),
+                                Cell::new(p.name),
+                                Cell::new(p.pid),
+                                status_cell,
+                                Cell::new(format!("{:.1}%", p.cpu_percent)),
+                                Cell::new(format_memory_bytes(p.memory_bytes)),
+                                Cell::new(format_duration(p.uptime_secs)),
+                            ]);
+                        }
+                        println!("{}", table);
+                    }
+                }
+                println!();
             }
             return Ok(());
         }
@@ -268,8 +567,14 @@ async fn main() -> Result<()> {
                         ]);
 
                     for j in jobs {
-                        let next_str = j.next_run.map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or("-".into());
-                        let last_str = j.last_run.map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or("-".into());
+                        let next_str = j
+                            .next_run
+                            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or("-".into());
+                        let last_str = j
+                            .last_run
+                            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or("-".into());
 
                         table.add_row(vec![
                             Cell::new(j.name),
@@ -373,9 +678,7 @@ async fn main() -> Result<()> {
                     None => (ExecMode::Fork, 1),
                 };
 
-                let mem_limit = max_memory_restart
-                    .as_deref()
-                    .and_then(parse_memory_string);
+                let mem_limit = max_memory_restart.as_deref().and_then(parse_memory_string);
 
                 let mut env_map = HashMap::new();
                 for (k, v) in envs {
@@ -492,7 +795,11 @@ async fn main() -> Result<()> {
                     };
                     println!(
                         "{} {} [{}#{}] {}",
-                        entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string().dimmed(),
+                        entry
+                            .timestamp
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string()
+                            .dimmed(),
                         stream_tag,
                         entry.app_name.cyan(),
                         entry.worker_id,
@@ -512,6 +819,11 @@ async fn main() -> Result<()> {
                     config,
                     logs_preview,
                 } => {
+                    let secrets_vault =
+                        gravhive::vault::SecretVault::load_vault().unwrap_or_default();
+                    let secret_values: Vec<String> =
+                        secrets_vault.secrets.values().cloned().collect();
+
                     println!("\n{}", "─".repeat(60).cyan());
                     println!(
                         " {} Application Details: {} (Worker #{})",
@@ -526,7 +838,10 @@ async fn main() -> Result<()> {
                     println!("  Uptime:         {}", format_duration(info.uptime_secs));
                     println!("  Restarts:       {}", info.restarts);
                     println!("  CPU Usage:      {:.1}%", info.cpu_percent);
-                    println!("  Memory:         {}", format_memory_bytes(info.memory_bytes));
+                    println!(
+                        "  Memory:         {}",
+                        format_memory_bytes(info.memory_bytes)
+                    );
                     println!("  Script:         {}", config.script);
                     println!("  Interpreter:    {:?}", config.interpreter);
                     println!("  Working Dir:    {:?}", config.cwd);
@@ -537,10 +852,21 @@ async fn main() -> Result<()> {
                     );
                     println!("  Watch:          {}", config.watch);
 
+                    if !config.env.is_empty() {
+                        println!("\n  Environment Variables:");
+                        for (k, v) in &config.env {
+                            let masked_val =
+                                gravhive::vault::mask_sensitive_text(v, &secret_values);
+                            println!("    {} = {}", k.dimmed(), masked_val);
+                        }
+                    }
+
                     if !logs_preview.is_empty() {
                         println!("\n  Recent Logs Preview:");
                         for line in logs_preview {
-                            println!("    {}", line.dimmed());
+                            let masked_line =
+                                gravhive::vault::mask_sensitive_text(&line, &secret_values);
+                            println!("    {}", masked_line.dimmed());
                         }
                     }
                     println!();
@@ -571,6 +897,80 @@ async fn main() -> Result<()> {
             print_response(resp);
         }
 
+        Commands::Mesh {
+            action:
+                MeshAction::Join {
+                    coordinator,
+                    token,
+                    name,
+                },
+        } => {
+            let node_name = name.unwrap_or_else(|| {
+                std::env::var("HOSTNAME").unwrap_or_else(|_| "node-worker".to_string())
+            });
+            println!(
+                "{} Joining Gravhive cluster coordinator at {} as '{}'...",
+                "●".cyan().bold(),
+                coordinator,
+                node_name
+            );
+            gravhive::mesh::MeshAgent::run_agent(coordinator, node_name, token, 3).await?;
+        }
+
+        Commands::Profile {
+            target,
+            duration,
+            output,
+            mode,
+        } => {
+            let selector = TargetSelector::parse(&target);
+            let resp = IpcClient::send_request(Request::Describe(selector)).await?;
+            let (pid, app_name) = match resp {
+                Response::ProcessDetails { info, .. } => {
+                    if info.pid == 0 || info.status != ProcessStatus::Online {
+                        anyhow::bail!(
+                            "Process '{}' is not online (PID: {}). Only running processes can be profiled.",
+                            info.name,
+                            info.pid
+                        );
+                    }
+                    (info.pid, info.name)
+                }
+                Response::Error { message } => anyhow::bail!("{}", message),
+                _ => anyhow::bail!("Could not retrieve process info for target '{}'", target),
+            };
+
+            let out_path = output.unwrap_or_else(|| {
+                let ts = chrono::Utc::now().timestamp();
+                PathBuf::from(format!("profile-{}-{}.svg", app_name, ts))
+            });
+
+            let prof_mode = match mode.to_lowercase().as_str() {
+                "memory" | "mem" => gravhive::profile::ProfileMode::Memory,
+                _ => gravhive::profile::ProfileMode::Cpu,
+            };
+
+            println!(
+                "{} Profiling [{:?}] for '{}' (PID: {}) for {} seconds...",
+                "●".cyan().bold(),
+                prof_mode,
+                app_name.bold(),
+                pid,
+                duration
+            );
+
+            gravhive::profile::Profiler::profile_process(
+                pid, &app_name, duration, &out_path, prof_mode,
+            )
+            .await?;
+
+            println!(
+                "\n{} Profiling completed! Flamegraph SVG generated at:\n  {}",
+                "✓".green().bold(),
+                out_path.display().to_string().bold()
+            );
+        }
+
         Commands::Kill => {
             let resp = IpcClient::send_request(Request::Shutdown).await?;
             print_response(resp);
@@ -578,7 +978,10 @@ async fn main() -> Result<()> {
 
         Commands::Ping => {
             IpcClient::ping().await?;
-            println!("{} Gravhive daemon is alive and responsive.", "✓".green().bold());
+            println!(
+                "{} Gravhive daemon is alive and responsive.",
+                "✓".green().bold()
+            );
         }
 
         _ => {}
@@ -621,7 +1024,10 @@ async fn ensure_daemon_running() -> Result<()> {
     let start_wait = std::time::Instant::now();
     while start_wait.elapsed() < Duration::from_millis(3000) {
         if sock.exists() && IpcClient::ping().await.is_ok() {
-            println!("{} Gravhive daemon spawned successfully.", "✓".green().bold());
+            println!(
+                "{} Gravhive daemon spawned successfully.",
+                "✓".green().bold()
+            );
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -682,7 +1088,11 @@ async fn print_process_table(as_json: bool) -> Result<()> {
                 Cell::new(p.id),
                 Cell::new(&p.name),
                 Cell::new(p.exec_mode),
-                Cell::new(if p.pid == 0 { "-".to_string() } else { p.pid.to_string() }),
+                Cell::new(if p.pid == 0 {
+                    "-".to_string()
+                } else {
+                    p.pid.to_string()
+                }),
                 Cell::new(format_duration(p.uptime_secs)),
                 Cell::new(p.restarts),
                 status_cell,

@@ -13,7 +13,10 @@ pub fn generate_startup_script() -> Result<()> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        println!("{}", "Automated startup script generation is not supported on this OS.".yellow());
+        println!(
+            "{}",
+            "Automated startup script generation is not supported on this OS.".yellow()
+        );
     }
     Ok(())
 }
@@ -43,7 +46,10 @@ WantedBy=multi-user.target
 
     let target_path = PathBuf::from("/etc/systemd/system/gravhive.service");
     println!("Generated Systemd service:\n{}", service_content);
-    println!("To install system-wide, run as root:\n  sudo cp <file> {}", target_path.display());
+    println!(
+        "To install system-wide, run as root:\n  sudo cp <file> {}",
+        target_path.display()
+    );
     println!("  sudo systemctl daemon-reload");
     println!("  sudo systemctl enable --now gravhive");
     Ok(())
@@ -87,7 +93,11 @@ fn generate_launchd_plist() -> Result<()> {
     );
 
     fs::write(&plist_path, plist_content)?;
-    println!("{} Created launchd service at {}", "✓".green().bold(), plist_path.display());
+    println!(
+        "{} Created launchd service at {}",
+        "✓".green().bold(),
+        plist_path.display()
+    );
     println!("To start service now, run:");
     println!("  launchctl load {}", plist_path.display());
     Ok(())
@@ -100,7 +110,11 @@ pub fn remove_startup_script() -> Result<()> {
             let plist_path = home.join("Library/LaunchAgents/com.gravhive.ghived.plist");
             if plist_path.exists() {
                 let _ = fs::remove_file(&plist_path);
-                println!("{} Removed launchd service at {}", "✓".green().bold(), plist_path.display());
+                println!(
+                    "{} Removed launchd service at {}",
+                    "✓".green().bold(),
+                    plist_path.display()
+                );
             }
         }
     }

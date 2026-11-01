@@ -108,10 +108,7 @@ impl SocketActivationManager {
 
                             // 1. If not running, trigger wake-up
                             if !is_running_arc.load(Ordering::SeqCst) {
-                                info!(
-                                    "[SOCKET-ACTIVATION] Waking up app '{}' on-demand...",
-                                    app_c
-                                );
+                                info!("[SOCKET-ACTIVATION] Waking up app '{}' on-demand...", app_c);
                                 let mut m = mgr.write().await;
                                 let _ = m
                                     .restart(
@@ -138,7 +135,8 @@ impl SocketActivationManager {
                             // 3. Proxy bytes bidirectionally
                             if let Some(mut upstream_stream) = upstream_conn {
                                 if let Err(e) =
-                                    copy_bidirectional(&mut client_stream, &mut upstream_stream).await
+                                    copy_bidirectional(&mut client_stream, &mut upstream_stream)
+                                        .await
                                 {
                                     debug!("[SOCKET-ACTIVATION] Connection closed: {}", e);
                                 }
@@ -196,4 +194,3 @@ impl SocketActivationManager {
         });
     }
 }
-

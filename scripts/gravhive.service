@@ -1,0 +1,25 @@
+[Unit]
+Description=Gravhive Process Manager Daemon
+Documentation=https://github.com/your-org/GravHive
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ghived
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=10
+
+# Security & Sandboxing
+LimitNOFILE=65535
+LimitNPROC=65535
+TasksMax=infinity
+
+# Environment
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=GHIVE_HOME=/root/.gravhive
+
+[Install]
+WantedBy=multi-user.target
+

@@ -43,7 +43,10 @@ impl CgroupManager {
                 if let Err(e) = fs::write(&mem_file, mem_bytes.to_string()) {
                     warn!("Failed to write cgroup memory.max: {}", e);
                 } else {
-                    debug!("Applied cgroup memory.max = {} for app '{}'", mem_bytes, app_name);
+                    debug!(
+                        "Applied cgroup memory.max = {} for app '{}'",
+                        mem_bytes, app_name
+                    );
                 }
             }
 
@@ -53,7 +56,10 @@ impl CgroupManager {
                 if let Err(e) = fs::write(&cpu_file, cpu_str) {
                     warn!("Failed to write cgroup cpu.max: {}", e);
                 } else {
-                    debug!("Applied cgroup cpu.max = '{}' for app '{}'", cpu_str, app_name);
+                    debug!(
+                        "Applied cgroup cpu.max = '{}' for app '{}'",
+                        cpu_str, app_name
+                    );
                 }
             }
 
@@ -89,7 +95,7 @@ impl CgroupManager {
 pub fn drop_privileges(user_name: Option<&str>, group_name: Option<&str>) -> Result<()> {
     #[cfg(unix)]
     {
-        use nix::unistd::{Group, User, setgid, setuid};
+        use nix::unistd::{setgid, setuid, Group, User};
 
         if let Some(grp) = group_name {
             if let Ok(Some(g)) = Group::from_name(grp) {
@@ -113,4 +119,3 @@ pub fn drop_privileges(user_name: Option<&str>, group_name: Option<&str>) -> Res
 
     Ok(())
 }
-

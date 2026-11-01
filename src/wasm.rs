@@ -75,7 +75,10 @@ impl WasmPluginManager {
 
         // Define a host logging function callable from WASM: host_log(i32, i32)
         let host_log = Func::wrap(&mut store, |_caller: Caller<()>, ptr: i32, len: i32| {
-            info!("[WASM-HOST] host_log called with ptr: {}, len: {}", ptr, len);
+            info!(
+                "[WASM-HOST] host_log called with ptr: {}, len: {}",
+                ptr, len
+            );
         });
         let _ = linker.define("env", "host_log", host_log);
 
@@ -84,9 +87,12 @@ impl WasmPluginManager {
             .with_context(|| "Failed to instantiate WASM plugin")?;
 
         // Check if plugin exports an init or on_event function
-        if let Some(on_event) = instance.get_typed_func::<i32, i32>(&store, "on_event").ok() {
+        if let Ok(on_event) = instance.get_typed_func::<i32, i32>(&store, "on_event") {
             let res = on_event.call(&mut store, 1);
-            debug!("Invoked on_event(1) on plugin '{}', result: {:?}", name, res);
+            debug!(
+                "Invoked on_event(1) on plugin '{}', result: {:?}",
+                name, res
+            );
         }
 
         let mut lock = self.plugins.lock().unwrap();
@@ -107,6 +113,12 @@ impl WasmPluginManager {
                 enabled: true,
             })
             .collect()
+    }
+}
+
+impl Default for WasmPluginManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

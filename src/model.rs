@@ -181,17 +181,41 @@ pub fn parse_memory_string(val: &str) -> Option<u64> {
     }
     let s_upper = s.to_uppercase();
     if let Some(num_str) = s_upper.strip_suffix("GB") {
-        num_str.trim().parse::<f64>().ok().map(|n| (n * 1024.0 * 1024.0 * 1024.0) as u64)
+        num_str
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| (n * 1024.0 * 1024.0 * 1024.0) as u64)
     } else if let Some(num_str) = s_upper.strip_suffix("G") {
-        num_str.trim().parse::<f64>().ok().map(|n| (n * 1024.0 * 1024.0 * 1024.0) as u64)
+        num_str
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| (n * 1024.0 * 1024.0 * 1024.0) as u64)
     } else if let Some(num_str) = s_upper.strip_suffix("MB") {
-        num_str.trim().parse::<f64>().ok().map(|n| (n * 1024.0 * 1024.0) as u64)
+        num_str
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| (n * 1024.0 * 1024.0) as u64)
     } else if let Some(num_str) = s_upper.strip_suffix("M") {
-        num_str.trim().parse::<f64>().ok().map(|n| (n * 1024.0 * 1024.0) as u64)
+        num_str
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| (n * 1024.0 * 1024.0) as u64)
     } else if let Some(num_str) = s_upper.strip_suffix("KB") {
-        num_str.trim().parse::<f64>().ok().map(|n| (n * 1024.0) as u64)
+        num_str
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| (n * 1024.0) as u64)
     } else if let Some(num_str) = s_upper.strip_suffix("K") {
-        num_str.trim().parse::<f64>().ok().map(|n| (n * 1024.0) as u64)
+        num_str
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| (n * 1024.0) as u64)
     } else if let Some(num_str) = s_upper.strip_suffix("B") {
         num_str.trim().parse::<u64>().ok()
     } else {
@@ -237,4 +261,3 @@ pub fn format_duration(seconds: u64) -> String {
         format!("{}s", secs)
     }
 }
-

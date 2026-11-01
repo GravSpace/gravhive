@@ -42,7 +42,10 @@ impl IpcServer {
         if sock_path.exists() {
             // Check if another daemon is already responding
             if IpcClient::ping().await.is_ok() {
-                bail!("Another instance of ghived is already running on {:?}", sock_path);
+                bail!(
+                    "Another instance of ghived is already running on {:?}",
+                    sock_path
+                );
             }
             let _ = fs::remove_file(&sock_path);
         }
@@ -60,7 +63,9 @@ impl IpcServer {
                     let cron_mgr = self.cron_manager.clone();
                     let wasm_mgr = self.wasm_manager.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, manager, log_hub, cron_mgr, wasm_mgr).await {
+                        if let Err(e) =
+                            handle_client(stream, manager, log_hub, cron_mgr, wasm_mgr).await
+                        {
                             debug!("Client connection closed: {}", e);
                         }
                     });
@@ -254,7 +259,7 @@ async fn handle_client(
                         };
                         if matches_app && matches_stream(&entry, stream) {
                             let resp = Response::LogLine(entry);
-                            if let Err(_) = writer.send(serde_json::to_string(&resp)?).await {
+                            if writer.send(serde_json::to_string(&resp)?).await.is_err() {
                                 break; // Client disconnected
                             }
                         }
@@ -290,7 +295,10 @@ async fn handle_client(
                 match mgr.resurrect_state(&path).await {
                     Ok(count) => {
                         let resp = Response::Ok {
-                            message: format!("Successfully resurrected {} apps from {:?}", count, path),
+                            message: format!(
+                                "Successfully resurrected {} apps from {:?}",
+                                count, path
+                            ),
                         };
                         writer.send(serde_json::to_string(&resp)?).await?;
                     }
@@ -329,13 +337,16 @@ async fn handle_client(
             }
             Request::Shutdown => {
                 let resp = Response::Ok {
-                    message: "Gravhive daemon shutting down and stopping all child processes...".to_string(),
+                    message: "Gravhive daemon shutting down and stopping all child processes..."
+                        .to_string(),
                 };
                 let _ = writer.send(serde_json::to_string(&resp)?).await;
 
                 // Stop all managed workers gracefully
                 let mut mgr = manager.write().await;
-                let _ = mgr.stop(&TargetSelector::All, Duration::from_millis(3000)).await;
+                let _ = mgr
+                    .stop(&TargetSelector::All, Duration::from_millis(3000))
+                    .await;
 
                 let _ = fs::remove_file(crate::common::socket_path());
                 let _ = fs::remove_file(crate::common::pid_file_path());

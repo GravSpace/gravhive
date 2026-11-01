@@ -232,7 +232,10 @@ impl Worker {
         let mut child_guard = self.child.lock().await;
         if let Some(mut child) = child_guard.take() {
             if let Some(pid) = child.id() {
-                debug!("[app: {}] Stopping worker #{} (PID {})", self.app_name, self.id, pid);
+                debug!(
+                    "[app: {}] Stopping worker #{} (PID {})",
+                    self.app_name, self.id, pid
+                );
 
                 #[cfg(unix)]
                 {
