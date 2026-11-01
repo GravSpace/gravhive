@@ -1,7 +1,7 @@
 # Gravhive (`ghive`) 🚀
 
-[![CI](https://github.com/your-org/GravHive/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/GravHive/actions/workflows/ci.yml)
-[![Release](https://github.com/your-org/GravHive/actions/workflows/release.yml/badge.svg)](https://github.com/your-org/GravHive/actions/workflows/release.yml)
+[![CI](https://github.com/GravSpace/gravhive/actions/workflows/ci.yml/badge.svg)](https://github.com/GravSpace/gravhive/actions/workflows/ci.yml)
+[![Release](https://github.com/GravSpace/gravhive/actions/workflows/release.yml/badge.svg)](https://github.com/GravSpace/gravhive/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **Next-Generation High-Performance Production Process Manager in Rust**  
@@ -20,7 +20,7 @@
   - PHP (CLI, Built-in Server, PHP-FPM / FrankenPHP)
   - Python (`.py`)
 - **Auto-Spawn Background Daemon:** Menjalankan perintah apa pun (seperti `ghive start`) otomatis menyalakan daemon `ghived` jika belum aktif.
-- **Auto-Restart & Crash Loop Protection:** Menangkap exit code $\ne 0$ dan menerapkan *Exponential Backoff with Jitter* untuk mencegah CPU thrashing.
+- **Auto-Restart & Crash Loop Protection:** Menangkap exit code $\ne 0$ dan menerapkan _Exponential Backoff with Jitter_ untuk mencegah CPU thrashing.
 - **Cluster Mode & Zero-Downtime Hot Reload:** Menjalankan worker di beberapa core CPU sekaligus (`-i max`) dan melakukan rolling update tanpa koneksi terputus (`ghive reload`).
 - **Max Memory Watchdog:** Memantau konsumsi RAM setiap worker secara real-time via `sysinfo`. Merestart otomatis saat ambang batas memori terlampaui (`--max-memory-restart`).
 - **Watch & Reload:** Memantau perubahan file secara event-driven via kernel inotify/kqueue (`--watch`).
@@ -34,8 +34,8 @@
 - **Socket Activation & Scale-to-Zero:** Menghemat konsumsi RAM hingga 100% pada aplikasi idle dengan menahan port TCP dan menyalakan worker secara instan hanya saat ada koneksi masuk.
 - **Extensible WASM Plugin System:** Menjalankan ekstensi pihak ketiga secara aman dalam WebAssembly sandbox (`wasmi`) dari file `.wasm` / `.wat` (`ghive plugins`).
 - **Multi-Server Mesh & Centralized Management (`ghive mesh`):** Hubungkan banyak server Gravhive ke dalam jaringan mesh terpadu. Pantau agregat proses dan kesehatan CPU/RAM seluruh node dari satu terminal pusat.
-- **In-Memory Secret Vault & AES-256-GCM Encryption (`ghive secrets`):** Enkripsi kuat untuk file konfigurasi `.env` (`.env.enc`) dan vault terenkripsi dengan penyamaran otomatis (*credential redaction*) di log dan `describe`.
-- **On-Demand CPU & Memory Profiling (`ghive profile`):** Generator *interactive SVG Flamegraph* bawaan tanpa dependensi luar untuk mendiagnosis bottleneck CPU dan memory leak pada aplikasi produksi secara real-time.
+- **In-Memory Secret Vault & AES-256-GCM Encryption (`ghive secrets`):** Enkripsi kuat untuk file konfigurasi `.env` (`.env.enc`) dan vault terenkripsi dengan penyamaran otomatis (_credential redaction_) di log dan `describe`.
+- **On-Demand CPU & Memory Profiling (`ghive profile`):** Generator _interactive SVG Flamegraph_ bawaan tanpa dependensi luar untuk mendiagnosis bottleneck CPU dan memory leak pada aplikasi produksi secara real-time.
 
 ---
 
@@ -51,13 +51,15 @@ bash install.sh
 ```
 
 **Fitur installer Linux (`install.sh`):**
+
 - Mendeteksi arsitektur CPU (`x86_64`, `aarch64` / `arm64`).
 - Memeriksa ketersediaan Linux **cgroups v2** untuk fitur isolasi memori & CPU.
 - Menginstal biner `ghive` dan `ghived` ke `/usr/local/bin` (atau `~/.local/bin`).
 - Mengonfigurasi, mengaktifkan, dan menyalakan systemd service otomatis (`/etc/systemd/system/gravhive.service`).
 - Inisialisasi direktori runtime `~/.gravhive/` (logs & plugins).
 
-Untuk menghapus instalasi (*uninstall*):
+Untuk menghapus instalasi (_uninstall_):
+
 ```bash
 bash install.sh --uninstall
 # atau
@@ -87,6 +89,7 @@ sudo ./install.sh
 ### 3. Kompilasi Manual dari Source
 
 ### Persyaratan
+
 - Rust toolchain (v1.75+)
 
 ```bash
@@ -107,6 +110,7 @@ sudo cp target/release/ghived /usr/local/bin/
 ## 📖 Panduan Penggunaan CLI
 
 ### 1. Menjalankan Aplikasi (`ghive start`)
+
 ```bash
 # Menjalankan aplikasi Node.js sederhana
 ghive start app.js --name "api-gateway"
@@ -125,10 +129,13 @@ ghive start ghive.toml
 ```
 
 ### 2. Melihat Status & Metrik Real-Time (`ghive list` / `ghive ls`)
+
 ```bash
 ghive list
 ```
+
 Output:
+
 ```
 ┌────┬────────────────┬─────────┬────────┬──────────┬────────┬──────────┬──────────┬──────────┐
 │ id │ name           │ mode    │ pid    │ uptime   │ ↺      │ status   │ cpu      │ mem      │
@@ -140,6 +147,7 @@ Output:
 ```
 
 ### 3. Mengontrol Proses (`stop`, `restart`, `reload`, `delete`)
+
 ```bash
 # Menghentikan proses
 ghive stop api-gateway
@@ -159,12 +167,15 @@ ghive delete all
 ```
 
 ### 4. Interactive TUI Monitor (`ghive monit`)
+
 ```bash
 ghive monit
 ```
-*Gunakan tombol `[↑/↓]` untuk navigasi proses, `[R]` restart, `[S]` stop, `[D]` delete, dan `[Q]` untuk keluar.*
+
+_Gunakan tombol `[↑/↓]` untuk navigasi proses, `[R]` restart, `[S]` stop, `[D]` delete, dan `[Q]` untuk keluar._
 
 ### 5. Melihat Log Aplikasi (`ghive logs`)
+
 ```bash
 # Menampilkan 50 baris log terakhir
 ghive logs api-gateway
@@ -177,6 +188,7 @@ ghive logs api-gateway --err
 ```
 
 ### 6. Menyimpan & Memulihkan State (`save` & `resurrect`)
+
 ```bash
 # Menyimpan snapshot semua proses aktif
 ghive save
@@ -186,6 +198,7 @@ ghive resurrect
 ```
 
 ### 7. Otomasi Startup Boot OS (`startup`)
+
 ```bash
 # Membuat startup service (Systemd di Linux / Launchd di macOS)
 ghive startup
@@ -195,6 +208,7 @@ ghive unstartup
 ```
 
 ### 8. Workflow Deployment Otomatis (`ghive deploy`)
+
 ```bash
 # Melakukan deployment ke target lingkungan yang didefinisikan di ghive.toml
 ghive deploy production
@@ -203,18 +217,21 @@ ghive deploy local
 ```
 
 ### 9. Scheduled Background Jobs (`ghive cron`)
+
 ```bash
 # Melihat daftar job berkala yang sedang terjadwal dan status eksekusinya
 ghive cron
 ```
 
 ### 10. WebAssembly Plugins (`ghive plugins`)
+
 ```bash
 # Melihat daftar plugin WASM yang aktif di ~/.gravhive/plugins/
 ghive plugins
 ```
 
 ### 11. In-Memory Secret Vault & Enkripsi Environment (`ghive secrets`)
+
 ```bash
 # Menyimpan secret terenkripsi (AES-256-GCM)
 ghive secrets set DATABASE_URL "postgres://app:s3cr3t@db.prod.internal:5432/main"
@@ -237,6 +254,7 @@ ghive secrets decrypt .env.enc
 ```
 
 ### 12. Multi-Server Mesh & Centralized Management (`ghive mesh`)
+
 ```bash
 # 1. Pada Server Coordinator (Master Node):
 # Menjalankan Mesh Coordinator listener
@@ -255,6 +273,7 @@ ghive mesh list --coordinator 192.168.1.10:9443 --token "cluster-secret-key"
 ```
 
 ### 13. On-Demand CPU & Memory Profiling (`ghive profile`)
+
 ```bash
 # Sampling CPU aplikasi selama 10 detik dan menghasilkan file SVG Flamegraph interaktif
 ghive profile api-gateway --duration 10 --output flamegraph-cpu.svg
@@ -271,11 +290,13 @@ ghive profile bun-web --duration 5 --mode memory --output flamegraph-memory.svg
 ## ⚙️ Format File Konfigurasi Lengkap (`ghive.toml`)
 
 Buat template konfigurasi otomatis dengan perintah:
+
 ```bash
 ghive ecosystem toml
 ```
 
 Contoh konfigurasi `ghive.toml`:
+
 ```toml
 # --- Standar Web Application ---
 [app.web-service]
@@ -335,5 +356,5 @@ post_deploy = "npm install && npm run build && ghive reload all"
 ---
 
 ## 🛡️ Lisensi
-Didistribusikan di bawah lisensi MIT / Apache-2.0.
 
+Didistribusikan di bawah lisensi MIT / Apache-2.0.
