@@ -102,6 +102,25 @@ impl Worker {
             cmd.env(k, v);
         }
 
+        if let Some(tp) = self.config.target_port {
+            cmd.env("PORT", tp.to_string());
+        }
+
+        #[cfg(unix)]
+        {
+            use nix::unistd::{Group, User};
+            if let Some(ref grp) = self.config.group {
+                if let Ok(Some(g)) = Group::from_name(grp) {
+                    cmd.gid(g.gid.as_raw());
+                }
+            }
+            if let Some(ref usr) = self.config.user {
+                if let Ok(Some(u)) = User::from_name(usr) {
+                    cmd.uid(u.uid.as_raw());
+                }
+            }
+        }
+
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -113,6 +132,19 @@ impl Worker {
         self.pid = Some(pid);
         self.status = ProcessStatus::Online;
         self.start_time = Some(Utc::now());
+
+        // Apply cgroups v2 if configured
+        if self.config.cgroup_memory_max.is_some()
+            || self.config.cgroup_cpu_max.is_some()
+            || self.config.cgroup_pids_max.is_some()
+        {
+            let cgroup_cfg = crate::isolation::CgroupConfig {
+                memory_max: self.config.cgroup_memory_max,
+                cpu_max: self.config.cgroup_cpu_max.clone(),
+                pids_max: self.config.cgroup_pids_max,
+            };
+            let _ = crate::isolation::CgroupManager::apply(&self.app_name, pid, &cgroup_cfg);
+        }
 
         info!(
             "[app: {}] Worker #{} spawned with PID {}",

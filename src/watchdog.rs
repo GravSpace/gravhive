@@ -1,3 +1,4 @@
+use crate::alerts::{AlertEvent, AlertManager};
 use crate::model::TargetSelector;
 use crate::process::ProcessManager;
 use std::collections::HashMap;
@@ -11,16 +12,22 @@ pub struct Watchdog {
     manager: Arc<RwLock<ProcessManager>>,
     system: System,
     interval: Duration,
+    alert_manager: Option<AlertManager>,
 }
 
 impl Watchdog {
-    pub fn new(manager: Arc<RwLock<ProcessManager>>, interval_secs: u64) -> Self {
+    pub fn new(
+        manager: Arc<RwLock<ProcessManager>>,
+        interval_secs: u64,
+        alert_manager: Option<AlertManager>,
+    ) -> Self {
         let mut system = System::new();
         system.refresh_processes(ProcessesToUpdate::All, true);
         Self {
             manager,
             system,
             interval: Duration::from_secs(interval_secs),
+            alert_manager,
         }
     }
 
@@ -55,6 +62,14 @@ impl Watchdog {
                     "[WATCHDOG] Worker #{} exceeded max_memory_restart! Initiating graceful restart...",
                     worker_id
                 );
+                if let Some(ref alerts) = self.alert_manager {
+                    alerts.send(AlertEvent::MemoryLimitExceeded {
+                        app: format!("worker-{}", worker_id),
+                        worker_id,
+                        memory_bytes: 0,
+                        limit_bytes: 0,
+                    });
+                }
                 let mut mgr = self.manager.write().await;
                 let _ = mgr
                     .restart(&TargetSelector::Id(worker_id), Duration::from_millis(5000))

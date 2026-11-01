@@ -23,6 +23,12 @@
 - **Log Management & Streaming:** Non-blocking async ring buffer di memori serta file log terisolasi (`ghive logs <app> -f`).
 - **Full-Screen TUI Dashboard (`ghive monit`):** Antarmuka terminal interaktif berbasis `ratatui` untuk memantau metrik CPU, RAM, status, dan logs secara langsung.
 - **State Persistence & Startup Integration:** Snapshot konfigurasi (`ghive save` & `ghive resurrect`) dan generator service boot OS (`ghive startup` untuk Systemd & macOS Launchd).
+- **Smart Alerting & Webhooks:** Notifikasi instan ke **Discord**, **Telegram**, **Slack**, dan Generic Webhook saat proses crash, memory exceeded, atau deployment result.
+- **Linux Kernel Isolation (cgroups v2 & Sandbox Security):** Pembatasan memori keras (`memory.max`), kuota CPU (`cpu.max`), proteksi fork-bomb (`pids.max`), dan privilege dropping (`setuid`/`setgid`).
+- **Built-in Cron & Job Scheduler:** Menjalankan script periodik berbasis ekspresi cron standar tanpa membutuhkan crontab OS (`ghive cron`).
+- **Zero-Downtime Deployment Workflow:** Pipeline deployment multi-tahap (`ghive deploy <env>`) dengan pre-deploy hook, git pull, post-deploy hook, dan rollback alert.
+- **Socket Activation & Scale-to-Zero:** Menghemat konsumsi RAM hingga 100% pada aplikasi idle dengan menahan port TCP dan menyalakan worker secara instan hanya saat ada koneksi masuk.
+- **Extensible WASM Plugin System:** Menjalankan ekstensi pihak ketiga secara aman dalam WebAssembly sandbox (`wasmi`) dari file `.wasm` / `.wat` (`ghive plugins`).
 
 ---
 
@@ -136,9 +142,29 @@ ghive startup
 ghive unstartup
 ```
 
+### 8. Workflow Deployment Otomatis (`ghive deploy`)
+```bash
+# Melakukan deployment ke target lingkungan yang didefinisikan di ghive.toml
+ghive deploy production
+ghive deploy staging
+ghive deploy local
+```
+
+### 9. Scheduled Background Jobs (`ghive cron`)
+```bash
+# Melihat daftar job berkala yang sedang terjadwal dan status eksekusinya
+ghive cron
+```
+
+### 10. WebAssembly Plugins (`ghive plugins`)
+```bash
+# Melihat daftar plugin WASM yang aktif di ~/.gravhive/plugins/
+ghive plugins
+```
+
 ---
 
-## ⚙️ Format File Konfigurasi (`ghive.toml`)
+## ⚙️ Format File Konfigurasi Lengkap (`ghive.toml`)
 
 Buat template konfigurasi otomatis dengan perintah:
 ```bash
@@ -147,6 +173,7 @@ ghive ecosystem toml
 
 Contoh konfigurasi `ghive.toml`:
 ```toml
+# --- Standar Web Application ---
 [app.web-service]
 script = "app.js"
 instances = "max"
@@ -156,6 +183,12 @@ max_memory_restart = "300MB"
 watch = false
 env = { NODE_ENV = "production", PORT = "8080" }
 
+# Linux cgroups v2 resource hard-limits
+# cgroup_memory_max = "500MB"
+# cgroup_cpu_max = "50000 100000"   # Kuota 50% CPU
+# cgroup_pids_max = 100
+
+# --- Background Worker ---
 [app.worker-service]
 script = "./target/release/worker"
 exec_mode = "fork"
@@ -163,6 +196,36 @@ instances = 1
 autorestart = true
 restart_delay = "500ms"
 max_restarts = 10
+
+# --- Scheduled Cron Job ---
+[app.nightly-backup]
+script = "python3 scripts/backup.py"
+cron = "0 2 * * *"                  # Berjalan otomatis setiap jam 02:00 pagi
+
+# --- Socket Activation & Scale-to-Zero ---
+[app.staging-service]
+script = "bun run server.ts"
+listen_port = 8080                  # Gravhive membuka port ini
+target_port = 18080                 # Worker berjalan di port internal ini
+idle_timeout_secs = 300             # Berhenti otomatis setelah 5 menit tidak ada traffic
+
+# --- Smart Alerting & Webhooks ---
+# [alerts.discord]
+# webhook_url = "https://discord.com/api/webhooks/..."
+
+# [alerts.telegram]
+# bot_token = "123456:ABC-DEF..."
+# chat_id = "12345678"
+
+# --- Deployment Pipeline ---
+[deploy.production]
+user = "deploy"
+host = "192.168.1.50"               # Gunakan "local" atau IP/hostname remote
+repo = "git@github.com:user/app.git"
+path = "/var/www/my-app"
+ref = "origin/main"
+pre_deploy = "echo 'Starting deployment...'"
+post_deploy = "npm install && npm run build && ghive reload all"
 ```
 
 ---

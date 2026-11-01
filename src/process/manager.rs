@@ -1,3 +1,4 @@
+use crate::alerts::{AlertEvent, AlertManager};
 use crate::model::{
     ExecMode, LogEntry, ProcessConfig, ProcessItem, ProcessStatus, TargetSelector,
 };
@@ -15,6 +16,7 @@ pub struct ProcessManager {
     workers: Vec<Worker>,
     next_id: u32,
     log_hub: LogHub,
+    alert_manager: Option<AlertManager>,
 }
 
 impl ProcessManager {
@@ -24,7 +26,12 @@ impl ProcessManager {
             workers: Vec::new(),
             next_id: 0,
             log_hub,
+            alert_manager: None,
         }
+    }
+
+    pub fn set_alert_manager(&mut self, alert_mgr: AlertManager) {
+        self.alert_manager = Some(alert_mgr);
     }
 
     pub async fn start_app(&mut self, mut config: ProcessConfig) -> Result<Vec<u32>> {
@@ -158,6 +165,13 @@ impl ProcessManager {
             reloaded_count += 1;
         }
 
+        if let Some(ref alerts) = self.alert_manager {
+            alerts.send(AlertEvent::ReloadSuccess {
+                app: format!("{}", target),
+                count: reloaded_count,
+            });
+        }
+
         Ok(reloaded_count)
     }
 
@@ -246,6 +260,15 @@ impl ProcessManager {
                         );
 
                         worker.pid = None;
+
+                        if let Some(ref alerts) = self.alert_manager {
+                            alerts.send(AlertEvent::ProcessCrash {
+                                app: worker.app_name.clone(),
+                                worker_id: worker.id,
+                                exit_code: status.to_string(),
+                                restarts: worker.restarts,
+                            });
+                        }
 
                         if worker.config.autorestart && worker.restarts < worker.config.max_restarts {
                             worker.restarts += 1;

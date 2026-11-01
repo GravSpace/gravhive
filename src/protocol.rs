@@ -1,4 +1,6 @@
+use crate::cron::CronJobInfo;
 use crate::model::{LogEntry, LogStreamType, ProcessConfig, ProcessItem, TargetSelector};
+use crate::wasm::PluginInfo;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +26,8 @@ pub enum Request {
     FlushLogs(TargetSelector),
     Save,
     Resurrect,
+    CronList,
+    PluginList,
     Shutdown,
 }
 
@@ -41,6 +45,12 @@ pub enum Response {
         info: ProcessItem,
         config: ProcessConfig,
         logs_preview: Vec<String>,
+    },
+    CronList {
+        jobs: Vec<CronJobInfo>,
+    },
+    PluginList {
+        plugins: Vec<PluginInfo>,
     },
     LogLine(LogEntry),
     Error {

@@ -1,8 +1,10 @@
 use crate::common::socket_path;
+use crate::cron::CronManager;
 use crate::model::{LogEntry, LogStreamType, TargetSelector};
 use crate::process::ProcessManager;
 use crate::protocol::{Request, Response};
 use crate::ring_buffer::LogHub;
+use crate::wasm::WasmPluginManager;
 use anyhow::{bail, Context, Result};
 use futures::{SinkExt, StreamExt};
 use std::fs;
@@ -16,11 +18,23 @@ use tracing::{debug, error, info};
 pub struct IpcServer {
     manager: Arc<RwLock<ProcessManager>>,
     log_hub: LogHub,
+    cron_manager: Option<CronManager>,
+    wasm_manager: Option<Arc<WasmPluginManager>>,
 }
 
 impl IpcServer {
-    pub fn new(manager: Arc<RwLock<ProcessManager>>, log_hub: LogHub) -> Self {
-        Self { manager, log_hub }
+    pub fn new(
+        manager: Arc<RwLock<ProcessManager>>,
+        log_hub: LogHub,
+        cron_manager: Option<CronManager>,
+        wasm_manager: Option<Arc<WasmPluginManager>>,
+    ) -> Self {
+        Self {
+            manager,
+            log_hub,
+            cron_manager,
+            wasm_manager,
+        }
     }
 
     pub async fn run(self) -> Result<()> {
@@ -43,8 +57,10 @@ impl IpcServer {
                 Ok((stream, _)) => {
                     let manager = self.manager.clone();
                     let log_hub = self.log_hub.clone();
+                    let cron_mgr = self.cron_manager.clone();
+                    let wasm_mgr = self.wasm_manager.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, manager, log_hub).await {
+                        if let Err(e) = handle_client(stream, manager, log_hub, cron_mgr, wasm_mgr).await {
                             debug!("Client connection closed: {}", e);
                         }
                     });
@@ -61,6 +77,8 @@ async fn handle_client(
     stream: UnixStream,
     manager: Arc<RwLock<ProcessManager>>,
     log_hub: LogHub,
+    cron_manager: Option<CronManager>,
+    wasm_manager: Option<Arc<WasmPluginManager>>,
 ) -> Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = FramedRead::new(read_half, LinesCodec::new());
@@ -283,6 +301,24 @@ async fn handle_client(
                         writer.send(serde_json::to_string(&resp)?).await?;
                     }
                 }
+            }
+            Request::CronList => {
+                let jobs = if let Some(ref cron) = cron_manager {
+                    cron.list_jobs().await
+                } else {
+                    Vec::new()
+                };
+                let resp = Response::CronList { jobs };
+                writer.send(serde_json::to_string(&resp)?).await?;
+            }
+            Request::PluginList => {
+                let plugins = if let Some(ref wasm) = wasm_manager {
+                    wasm.list_plugins()
+                } else {
+                    Vec::new()
+                };
+                let resp = Response::PluginList { plugins };
+                writer.send(serde_json::to_string(&resp)?).await?;
             }
             Request::FlushLogs(_) => {
                 log_hub.clear();

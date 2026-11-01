@@ -22,3 +22,9 @@ instances = 1
 autorestart = true
 max_restarts = 10
 env = { WORKER_THREADS = "4" }
+
+[deploy.local-test]
+host = "local"
+path = "."
+pre_deploy = "echo 'Running pre-deploy hook...'"
+post_deploy = "echo 'Running post-deploy hook...'"

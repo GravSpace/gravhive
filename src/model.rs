@@ -106,6 +106,24 @@ pub struct ProcessConfig {
     pub out_log: Option<PathBuf>,
     #[serde(default)]
     pub err_log: Option<PathBuf>,
+    #[serde(default)]
+    pub cron: Option<String>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub cgroup_memory_max: Option<u64>,
+    #[serde(default)]
+    pub cgroup_cpu_max: Option<String>,
+    #[serde(default)]
+    pub cgroup_pids_max: Option<u32>,
+    #[serde(default)]
+    pub listen_port: Option<u16>,
+    #[serde(default)]
+    pub target_port: Option<u16>,
+    #[serde(default)]
+    pub idle_timeout_secs: Option<u64>,
 }
 
 fn default_exec_mode() -> ExecMode {

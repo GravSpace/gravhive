@@ -165,6 +165,22 @@ enum Commands {
     /// Remove OS startup script
     Unstartup,
 
+    /// Deploy application to an environment configured in ghive.toml
+    Deploy {
+        /// Target environment name (e.g. production, staging, local)
+        environment: String,
+
+        /// Path to ecosystem config file (default: ghive.toml)
+        #[arg(short, long, default_value = "ghive.toml")]
+        config: PathBuf,
+    },
+
+    /// List and inspect scheduled cron jobs
+    Cron,
+
+    /// List active WebAssembly (WASM) plugins
+    Plugins,
+
     /// Stop the Gravhive background daemon
     Kill,
 
@@ -209,6 +225,21 @@ async fn main() -> Result<()> {
             remove_startup_script()?;
             return Ok(());
         }
+        Commands::Deploy { environment, config } => {
+            let (_, alerts, targets) = gravhive::config::load_ecosystem(&config)?;
+            let alert_mgr = alerts.map(gravhive::alerts::AlertManager::new);
+            if let Some(target) = targets.get(&environment) {
+                gravhive::deploy::DeployManager::execute_deploy(&environment, target, alert_mgr.as_ref())?;
+            } else {
+                eprintln!(
+                    "{} Environment '{}' not found in {}",
+                    "✗".red().bold(),
+                    environment,
+                    config.display()
+                );
+            }
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -216,6 +247,72 @@ async fn main() -> Result<()> {
     ensure_daemon_running().await?;
 
     match cli.command {
+        Commands::Cron => {
+            let resp = IpcClient::send_request(Request::CronList).await?;
+            if let Response::CronList { jobs } = resp {
+                if jobs.is_empty() {
+                    println!("\nNo scheduled cron jobs found.\nAdd one in ghive.toml using `cron = \"...\"`\n");
+                } else {
+                    let mut table = Table::new();
+                    table
+                        .load_preset(UTF8_ROUND_CORNERS)
+                        .set_content_arrangement(ContentArrangement::Dynamic)
+                        .set_header(vec![
+                            Cell::new("name").fg(TableColor::Cyan),
+                            Cell::new("schedule").fg(TableColor::Cyan),
+                            Cell::new("command").fg(TableColor::Cyan),
+                            Cell::new("next run").fg(TableColor::Cyan),
+                            Cell::new("last run").fg(TableColor::Cyan),
+                            Cell::new("runs").fg(TableColor::Cyan),
+                            Cell::new("status").fg(TableColor::Cyan),
+                        ]);
+
+                    for j in jobs {
+                        let next_str = j.next_run.map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or("-".into());
+                        let last_str = j.last_run.map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string()).unwrap_or("-".into());
+
+                        table.add_row(vec![
+                            Cell::new(j.name),
+                            Cell::new(j.expression),
+                            Cell::new(j.command),
+                            Cell::new(next_str),
+                            Cell::new(last_str),
+                            Cell::new(j.runs_count),
+                            Cell::new(j.last_status),
+                        ]);
+                    }
+                    println!("\n{}\n", table);
+                }
+            }
+        }
+
+        Commands::Plugins => {
+            let resp = IpcClient::send_request(Request::PluginList).await?;
+            if let Response::PluginList { plugins } = resp {
+                if plugins.is_empty() {
+                    println!("\nNo active WASM plugins found.\nPlace .wasm / .wat modules in ~/.gravhive/plugins/\n");
+                } else {
+                    let mut table = Table::new();
+                    table
+                        .load_preset(UTF8_ROUND_CORNERS)
+                        .set_content_arrangement(ContentArrangement::Dynamic)
+                        .set_header(vec![
+                            Cell::new("plugin name").fg(TableColor::Cyan),
+                            Cell::new("path").fg(TableColor::Cyan),
+                            Cell::new("status").fg(TableColor::Cyan),
+                        ]);
+
+                    for p in plugins {
+                        table.add_row(vec![
+                            Cell::new(p.name),
+                            Cell::new(p.path),
+                            Cell::new("enabled").fg(TableColor::Green),
+                        ]);
+                    }
+                    println!("\n{}\n", table);
+                }
+            }
+        }
         Commands::Start {
             target,
             name,
@@ -305,6 +402,15 @@ async fn main() -> Result<()> {
                     interpreter: final_interpreter,
                     out_log: None,
                     err_log: None,
+                    cron: None,
+                    user: None,
+                    group: None,
+                    cgroup_memory_max: None,
+                    cgroup_cpu_max: None,
+                    cgroup_pids_max: None,
+                    listen_port: None,
+                    target_port: None,
+                    idle_timeout_secs: None,
                 };
 
                 let resp = IpcClient::send_request(Request::Start(config)).await?;
