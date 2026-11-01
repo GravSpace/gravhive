@@ -115,6 +115,30 @@ async fn handle_client(
             Request::Start(config) => {
                 let app_name = config.name.clone();
                 let instances = config.instances;
+
+                if let Some(ref expr) = config.cron {
+                    if let Some(ref cron) = cron_manager {
+                        match cron.add_job(&app_name, expr, &config.script, &config.args).await {
+                            Ok(()) => {
+                                let resp = Response::Ok {
+                                    message: format!(
+                                        "Scheduled cron job '{}' registered successfully with schedule '{}'",
+                                        app_name, expr
+                                    ),
+                                };
+                                writer.send(serde_json::to_string(&resp)?).await?;
+                            }
+                            Err(e) => {
+                                let resp = Response::Error {
+                                    message: format!("Failed to schedule cron job '{}': {}", app_name, e),
+                                };
+                                writer.send(serde_json::to_string(&resp)?).await?;
+                            }
+                        }
+                        continue;
+                    }
+                }
+
                 let mut mgr = manager.write().await;
                 match mgr.start_app(config).await {
                     Ok(ids) => {
@@ -138,10 +162,36 @@ async fn handle_client(
                 let mut mgr = manager.write().await;
                 match mgr.stop(&target, Duration::from_millis(5000)).await {
                     Ok(count) => {
-                        let resp = Response::Ok {
-                            message: format!("Stopped {} process(es) matching {}", count, target),
-                        };
-                        writer.send(serde_json::to_string(&resp)?).await?;
+                        if count > 0 {
+                            let resp = Response::Ok {
+                                message: format!("Stopped {} process(es) matching {}", count, target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        } else if let Some(ref cron) = cron_manager {
+                            let cron_name = match &target {
+                                TargetSelector::Name(n) => Some(n.as_str()),
+                                TargetSelector::All => Some("all"),
+                                TargetSelector::Id(_) => None,
+                            };
+                            if let Some(name) = cron_name {
+                                if let Ok(c) = cron.stop_job(name).await {
+                                    let resp = Response::Ok {
+                                        message: format!("Stopped {} cron job(s) matching '{}'", c, name),
+                                    };
+                                    writer.send(serde_json::to_string(&resp)?).await?;
+                                    continue;
+                                }
+                            }
+                            let resp = Response::Ok {
+                                message: format!("Stopped 0 process(es) matching {}", target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        } else {
+                            let resp = Response::Ok {
+                                message: format!("Stopped 0 process(es) matching {}", target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
                     }
                     Err(e) => {
                         let resp = Response::Error {
@@ -155,10 +205,36 @@ async fn handle_client(
                 let mut mgr = manager.write().await;
                 match mgr.restart(&target, Duration::from_millis(5000)).await {
                     Ok(count) => {
-                        let resp = Response::Ok {
-                            message: format!("Restarted {} process(es) matching {}", count, target),
-                        };
-                        writer.send(serde_json::to_string(&resp)?).await?;
+                        if count > 0 {
+                            let resp = Response::Ok {
+                                message: format!("Restarted {} process(es) matching {}", count, target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        } else if let Some(ref cron) = cron_manager {
+                            let cron_name = match &target {
+                                TargetSelector::Name(n) => Some(n.as_str()),
+                                TargetSelector::All => Some("all"),
+                                TargetSelector::Id(_) => None,
+                            };
+                            if let Some(name) = cron_name {
+                                if let Ok(c) = cron.restart_job(name).await {
+                                    let resp = Response::Ok {
+                                        message: format!("Resumed {} cron job(s) matching '{}'", c, name),
+                                    };
+                                    writer.send(serde_json::to_string(&resp)?).await?;
+                                    continue;
+                                }
+                            }
+                            let resp = Response::Ok {
+                                message: format!("Restarted 0 process(es) matching {}", target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        } else {
+                            let resp = Response::Ok {
+                                message: format!("Restarted 0 process(es) matching {}", target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
                     }
                     Err(e) => {
                         let resp = Response::Error {
@@ -171,10 +247,12 @@ async fn handle_client(
             Request::Reload {
                 target,
                 graceful_timeout_ms,
+                readiness_delay_ms,
             } => {
                 let timeout = Duration::from_millis(graceful_timeout_ms.unwrap_or(5000));
+                let delay = Duration::from_millis(readiness_delay_ms.unwrap_or(80));
                 let mut mgr = manager.write().await;
-                match mgr.reload(&target, timeout).await {
+                match mgr.reload(&target, timeout, delay).await {
                     Ok(count) => {
                         let resp = Response::Ok {
                             message: format!(
@@ -196,10 +274,36 @@ async fn handle_client(
                 let mut mgr = manager.write().await;
                 match mgr.delete(&target, Duration::from_millis(5000)).await {
                     Ok(count) => {
-                        let resp = Response::Ok {
-                            message: format!("Deleted {} process(es) matching {}", count, target),
-                        };
-                        writer.send(serde_json::to_string(&resp)?).await?;
+                        if count > 0 {
+                            let resp = Response::Ok {
+                                message: format!("Deleted {} process(es) matching {}", count, target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        } else if let Some(ref cron) = cron_manager {
+                            let cron_name = match &target {
+                                TargetSelector::Name(n) => Some(n.as_str()),
+                                TargetSelector::All => Some("all"),
+                                TargetSelector::Id(_) => None,
+                            };
+                            if let Some(name) = cron_name {
+                                if let Ok(c) = cron.delete_job(name).await {
+                                    let resp = Response::Ok {
+                                        message: format!("Deleted {} cron job(s) matching '{}'", c, name),
+                                    };
+                                    writer.send(serde_json::to_string(&resp)?).await?;
+                                    continue;
+                                }
+                            }
+                            let resp = Response::Ok {
+                                message: format!("Deleted 0 process(es) matching {}", target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        } else {
+                            let resp = Response::Ok {
+                                message: format!("Deleted 0 process(es) matching {}", target),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
                     }
                     Err(e) => {
                         let resp = Response::Error {
@@ -318,6 +422,75 @@ async fn handle_client(
                 };
                 let resp = Response::CronList { jobs };
                 writer.send(serde_json::to_string(&resp)?).await?;
+            }
+            Request::CronStop(name) => {
+                if let Some(ref cron) = cron_manager {
+                    match cron.stop_job(&name).await {
+                        Ok(count) => {
+                            let resp = Response::Ok {
+                                message: format!("Stopped {} cron job(s) matching '{}'", count, name),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
+                        Err(e) => {
+                            let resp = Response::Error {
+                                message: format!("Failed to stop cron job '{}': {}", name, e),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
+                    }
+                } else {
+                    let resp = Response::Error {
+                        message: "Cron manager is not active in this daemon".to_string(),
+                    };
+                    writer.send(serde_json::to_string(&resp)?).await?;
+                }
+            }
+            Request::CronRestart(name) => {
+                if let Some(ref cron) = cron_manager {
+                    match cron.restart_job(&name).await {
+                        Ok(count) => {
+                            let resp = Response::Ok {
+                                message: format!("Resumed {} cron job(s) matching '{}'", count, name),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
+                        Err(e) => {
+                            let resp = Response::Error {
+                                message: format!("Failed to restart cron job '{}': {}", name, e),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
+                    }
+                } else {
+                    let resp = Response::Error {
+                        message: "Cron manager is not active in this daemon".to_string(),
+                    };
+                    writer.send(serde_json::to_string(&resp)?).await?;
+                }
+            }
+            Request::CronDelete(name) => {
+                if let Some(ref cron) = cron_manager {
+                    match cron.delete_job(&name).await {
+                        Ok(count) => {
+                            let resp = Response::Ok {
+                                message: format!("Deleted {} cron job(s) matching '{}'", count, name),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
+                        Err(e) => {
+                            let resp = Response::Error {
+                                message: format!("Failed to delete cron job '{}': {}", name, e),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
+                    }
+                } else {
+                    let resp = Response::Error {
+                        message: "Cron manager is not active in this daemon".to_string(),
+                    };
+                    writer.send(serde_json::to_string(&resp)?).await?;
+                }
             }
             Request::PluginList => {
                 let plugins = if let Some(ref wasm) = wasm_manager {

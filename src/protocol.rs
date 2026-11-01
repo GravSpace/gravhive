@@ -15,6 +15,7 @@ pub enum Request {
     Reload {
         target: TargetSelector,
         graceful_timeout_ms: Option<u64>,
+        readiness_delay_ms: Option<u64>,
     },
     Delete(TargetSelector),
     List,
@@ -29,6 +30,9 @@ pub enum Request {
     Save,
     Resurrect,
     CronList,
+    CronStop(String),
+    CronRestart(String),
+    CronDelete(String),
     PluginList,
     Shutdown,
 }

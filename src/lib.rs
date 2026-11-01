@@ -15,6 +15,7 @@ pub mod ring_buffer;
 pub mod socket_activation;
 pub mod startup;
 pub mod tui;
+pub mod upgrade;
 pub mod vault;
 pub mod wasm;
 pub mod watchdog;

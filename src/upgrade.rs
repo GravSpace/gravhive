@@ -1,0 +1,389 @@
+use anyhow::{bail, Context, Result};
+use colored::*;
+use serde::Deserialize;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const DEFAULT_REPO: &str = "GravSpace/GravHive";
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug, Deserialize)]
+pub struct GitHubRelease {
+    pub tag_name: String,
+    pub name: Option<String>,
+    pub body: Option<String>,
+    pub assets: Vec<GitHubAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitHubAsset {
+    pub name: String,
+    pub browser_download_url: String,
+    pub size: u64,
+}
+
+pub struct Upgrader;
+
+impl Upgrader {
+    /// Detects current system target triple corresponding to release asset names
+    pub fn detect_target() -> Result<&'static str> {
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+
+        match (os, arch) {
+            ("linux", "x86_64") => Ok("x86_64-unknown-linux-gnu"),
+            ("linux", "aarch64") => Ok("aarch64-unknown-linux-gnu"),
+            ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
+            ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
+            _ => bail!(
+                "Self-upgrade is currently not supported for OS '{}' and architecture '{}'",
+                os,
+                arch
+            ),
+        }
+    }
+
+    /// Compare semver-like version strings
+    pub fn is_newer(current: &str, target: &str) -> bool {
+        let current_parts = Self::parse_semver(current);
+        let target_parts = Self::parse_semver(target);
+        target_parts > current_parts
+    }
+
+    fn parse_semver(v: &str) -> (u32, u32, u32) {
+        let clean = v.trim().trim_start_matches('v');
+        let mut parts = clean.split('.');
+        let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let patch = parts
+            .next()
+            .and_then(|s| s.split('-').next()) // ignore pre-release suffix
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        (major, minor, patch)
+    }
+
+    /// Fetch latest or specific release metadata from GitHub API
+    pub async fn fetch_release(repo: &str, target_tag: Option<&str>) -> Result<GitHubRelease> {
+        let url = match target_tag {
+            Some(tag) => {
+                let clean_tag = if tag.starts_with('v') {
+                    tag.to_string()
+                } else {
+                    format!("v{}", tag)
+                };
+                format!(
+                    "https://api.github.com/repos/{}/releases/tags/{}",
+                    repo, clean_tag
+                )
+            }
+            None => format!("https://api.github.com/repos/{}/releases/latest", repo),
+        };
+
+        let client = reqwest::Client::builder()
+            .user_agent(format!("gravhive-updater/{}", CURRENT_VERSION))
+            .build()?;
+
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to connect to GitHub Releases API at {}", url))?;
+
+        if !resp.status().is_success() {
+            if resp.status().as_u16() == 404 {
+                bail!("Release not found on repository '{}' ({})", repo, url);
+            }
+            bail!(
+                "GitHub API returned error {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            );
+        }
+
+        let release = resp
+            .json::<GitHubRelease>()
+            .await
+            .context("Failed to parse release response from GitHub")?;
+
+        Ok(release)
+    }
+
+    /// Execute the complete upgrade workflow
+    pub async fn upgrade(
+        target_version: Option<String>,
+        force: bool,
+        check_only: bool,
+    ) -> Result<()> {
+        let repo = std::env::var("GHIVE_UPDATE_REPO").unwrap_or_else(|_| DEFAULT_REPO.to_string());
+        let current_target = Self::detect_target()?;
+
+        println!(
+            "{} Checking for Gravhive updates on {}...",
+            "ℹ".cyan(),
+            repo.bold()
+        );
+
+        let release = Self::fetch_release(&repo, target_version.as_deref()).await?;
+        let latest_tag = release.tag_name.trim_start_matches('v');
+
+        println!("  Current version: {}", CURRENT_VERSION.bold());
+        println!("  Latest version:  {}", latest_tag.bold());
+
+        let has_new_version = Self::is_newer(CURRENT_VERSION, latest_tag);
+
+        if check_only {
+            if has_new_version {
+                println!(
+                    "\n{} A new version is available: {} -> {}\nRun {} to update.\n",
+                    "🚀".green(),
+                    CURRENT_VERSION.yellow(),
+                    latest_tag.green().bold(),
+                    "ghive upgrade".bold()
+                );
+            } else {
+                println!(
+                    "\n{} Gravhive is up to date (v{}).\n",
+                    "✓".green().bold(),
+                    CURRENT_VERSION
+                );
+            }
+            return Ok(());
+        }
+
+        if !has_new_version && !force && target_version.is_none() {
+            println!(
+                "\n{} Gravhive is already at the latest version (v{}). Use {} to force reinstall.\n",
+                "✓".green().bold(),
+                CURRENT_VERSION,
+                "--force".bold()
+            );
+            return Ok(());
+        }
+
+        // Find appropriate tarball asset
+        let expected_asset_suffix = format!("{}.tar.gz", current_target);
+        let asset = release
+            .assets
+            .iter()
+            .find(|a| a.name.ends_with(&expected_asset_suffix))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No matching release asset found for target '{}' in release '{}'. Available assets: {:?}",
+                    current_target,
+                    release.tag_name,
+                    release.assets.iter().map(|a| &a.name).collect::<Vec<_>>()
+                )
+            })?;
+
+        println!(
+            "\n{} Downloading {} ({:.2} MB)...",
+            "⬇".cyan().bold(),
+            asset.name.bold(),
+            asset.size as f64 / (1024.0 * 1024.0)
+        );
+
+        let client = reqwest::Client::builder()
+            .user_agent(format!("gravhive-updater/{}", CURRENT_VERSION))
+            .build()?;
+
+        let bytes = client
+            .get(&asset.browser_download_url)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to download asset from {}",
+                    asset.browser_download_url
+                )
+            })?
+            .bytes()
+            .await
+            .context("Failed to read asset payload")?;
+
+        // Prepare temporary extraction directory
+        let temp_dir = std::env::temp_dir().join(format!("gravhive_update_{}", std::process::id()));
+        if temp_dir.exists() {
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
+        fs::create_dir_all(&temp_dir)?;
+
+        let archive_path = temp_dir.join("release.tar.gz");
+        fs::write(&archive_path, &bytes)?;
+
+        // Extract tar.gz using system tar
+        println!("{} Extracting release archive...", "📦".cyan());
+        let tar_status = Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive_path)
+            .arg("-C")
+            .arg(&temp_dir)
+            .status()
+            .context("Failed to execute 'tar' utility to unpack release archive")?;
+
+        if !tar_status.success() {
+            bail!(
+                "Failed to unpack release archive: exit status {}",
+                tar_status
+            );
+        }
+
+        // Locate newly extracted binaries
+        let (new_ghive, new_ghived) = Self::find_binaries_in_dir(&temp_dir)?;
+
+        // Determine destination paths based on current running binary
+        let current_ghive = std::env::current_exe()
+            .context("Failed to determine current 'ghive' executable path")?;
+        let current_ghived = current_ghive.with_file_name("ghived");
+
+        println!(
+            "{} Installing updated binaries to {} and {}...",
+            "⚙".cyan(),
+            current_ghive.display(),
+            current_ghived.display()
+        );
+
+        // Atomic replacement
+        Self::replace_binary(&new_ghive, &current_ghive)
+            .with_context(|| format!("Failed to update binary at {}", current_ghive.display()))?;
+
+        if current_ghived.exists() || new_ghived.exists() {
+            Self::replace_binary(&new_ghived, &current_ghived).with_context(|| {
+                format!(
+                    "Failed to update daemon binary at {}",
+                    current_ghived.display()
+                )
+            })?;
+        }
+
+        // Cleanup temp folder
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        println!(
+            "\n{} Successfully upgraded Gravhive to {} ({})!",
+            "✓".green().bold(),
+            release.tag_name.bold(),
+            current_target
+        );
+
+        // Check if daemon is running and restart it gracefully
+        if crate::ipc::IpcClient::ping().await.is_ok() {
+            println!(
+                "{} Restarting running background daemon with updated binary...",
+                "↺".cyan()
+            );
+            let _ = crate::ipc::IpcClient::send_request(crate::protocol::Request::Shutdown).await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            println!(
+                "{} Daemon restarted. Your running apps will remain preserved on restart.",
+                "✓".green()
+            );
+        }
+
+        if let Some(ref notes) = release.body {
+            if !notes.trim().is_empty() {
+                println!("\nRelease Notes:\n{}", notes.trim().dimmed());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Search for ghive and ghived in extracted directory
+    fn find_binaries_in_dir(root: &Path) -> Result<(PathBuf, PathBuf)> {
+        let mut ghive_opt = None;
+        let mut ghived_opt = None;
+
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            if let Ok(entries) = fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if let Some(file_name) = path.file_name().and_then(|f| f.to_str()) {
+                        if file_name == "ghive" {
+                            ghive_opt = Some(path.clone());
+                        } else if file_name == "ghived" {
+                            ghived_opt = Some(path.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        let ghive_path = ghive_opt
+            .ok_or_else(|| anyhow::anyhow!("Could not find 'ghive' binary in unpacked archive"))?;
+        let ghived_path = ghived_opt
+            .ok_or_else(|| anyhow::anyhow!("Could not find 'ghived' binary in unpacked archive"))?;
+
+        Ok((ghive_path, ghived_path))
+    }
+
+    /// Safely replace an existing binary in a Unix-atomic manner
+    fn replace_binary(src: &Path, dest: &Path) -> Result<()> {
+        let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+        let temp_dest = parent.join(format!(
+            ".{}.new.{}",
+            dest.file_name().and_then(|f| f.to_str()).unwrap_or("bin"),
+            std::process::id()
+        ));
+
+        // Copy source to temporary file in the destination directory
+        if let Err(e) = fs::copy(src, &temp_dest) {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                bail!(
+                    "Permission denied to write to '{}'.\nPlease re-run the upgrade command with root privileges: 'sudo ghive upgrade'",
+                    dest.display()
+                );
+            }
+            return Err(e).context("Failed to write temporary binary");
+        }
+
+        // Set executable permissions (0755)
+        let _ = fs::set_permissions(&temp_dest, fs::Permissions::from_mode(0o755));
+
+        // Atomic rename into target location
+        if let Err(e) = fs::rename(&temp_dest, dest) {
+            let _ = fs::remove_file(&temp_dest);
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                bail!(
+                    "Permission denied to replace '{}'.\nPlease re-run with sudo: 'sudo ghive upgrade'",
+                    dest.display()
+                );
+            }
+            return Err(e).context("Failed to replace destination binary");
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_semver_parsing() {
+        assert_eq!(Upgrader::parse_semver("0.1.0"), (0, 1, 0));
+        assert_eq!(Upgrader::parse_semver("v1.2.3"), (1, 2, 3));
+        assert_eq!(Upgrader::parse_semver("v2.10.5-beta.1"), (2, 10, 5));
+    }
+
+    #[test]
+    fn test_is_newer_version() {
+        assert!(Upgrader::is_newer("0.1.0", "0.1.1"));
+        assert!(Upgrader::is_newer("0.1.0", "0.2.0"));
+        assert!(Upgrader::is_newer("0.1.0", "1.0.0"));
+        assert!(!Upgrader::is_newer("0.2.0", "0.1.9"));
+        assert!(!Upgrader::is_newer("1.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn test_detect_target() {
+        let target = Upgrader::detect_target();
+        assert!(target.is_ok());
+    }
+}

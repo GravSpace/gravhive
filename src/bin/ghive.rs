@@ -70,6 +70,10 @@ enum Commands {
         /// Arguments passed to the target script
         #[arg(last = true)]
         args: Vec<String>,
+
+        /// Scheduled cron expression (e.g. "0 */5 * * * *" or "0 2 * * *")
+        #[arg(long)]
+        cron: Option<String>,
     },
 
     /// Stop an application by ID, Name, or 'all'
@@ -92,6 +96,10 @@ enum Commands {
         /// Graceful shutdown timeout in milliseconds
         #[arg(long, default_value = "5000")]
         timeout: u64,
+
+        /// Readiness stabilization delay between worker replacements in milliseconds
+        #[arg(long, default_value = "80")]
+        delay: u64,
     },
 
     /// Delete an application from Gravhive registry
@@ -175,8 +183,11 @@ enum Commands {
         config: PathBuf,
     },
 
-    /// List and inspect scheduled cron jobs
-    Cron,
+    /// Manage scheduled cron jobs (list, stop, restart, delete)
+    Cron {
+        #[command(subcommand)]
+        action: Option<CronAction>,
+    },
 
     /// List active WebAssembly (WASM) plugins
     Plugins,
@@ -216,6 +227,48 @@ enum Commands {
 
     /// Check daemon status and connection
     Ping,
+
+    /// Upgrade Gravhive binary to the latest or a specified release
+    #[command(alias = "update")]
+    Upgrade {
+        /// Target version to install (e.g. 0.2.0, default: latest)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Force reinstallation even if already on the latest version
+        #[arg(short, long)]
+        force: bool,
+
+        /// Only check for updates without downloading or installing
+        #[arg(short, long)]
+        check: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum CronAction {
+    /// List all scheduled cron jobs (default)
+    #[command(alias = "ls")]
+    List,
+
+    /// Stop/pause a scheduled cron job
+    Stop {
+        /// Name of the cron job or 'all'
+        name: String,
+    },
+
+    /// Restart/resume a paused cron job
+    Restart {
+        /// Name of the cron job or 'all'
+        name: String,
+    },
+
+    /// Delete/remove a scheduled cron job
+    #[command(alias = "rm")]
+    Delete {
+        /// Name of the cron job or 'all'
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -539,6 +592,10 @@ async fn main() -> Result<()> {
             }
             return Ok(());
         }
+        Commands::Upgrade { to, force, check } => {
+            gravhive::upgrade::Upgrader::upgrade(to, force, check).await?;
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -546,47 +603,76 @@ async fn main() -> Result<()> {
     ensure_daemon_running().await?;
 
     match cli.command {
-        Commands::Cron => {
-            let resp = IpcClient::send_request(Request::CronList).await?;
-            if let Response::CronList { jobs } = resp {
-                if jobs.is_empty() {
-                    println!("\nNo scheduled cron jobs found.\nAdd one in ghive.toml using `cron = \"...\"`\n");
-                } else {
-                    let mut table = Table::new();
-                    table
-                        .load_preset(UTF8_ROUND_CORNERS)
-                        .set_content_arrangement(ContentArrangement::Dynamic)
-                        .set_header(vec![
-                            Cell::new("name").fg(TableColor::Cyan),
-                            Cell::new("schedule").fg(TableColor::Cyan),
-                            Cell::new("command").fg(TableColor::Cyan),
-                            Cell::new("next run").fg(TableColor::Cyan),
-                            Cell::new("last run").fg(TableColor::Cyan),
-                            Cell::new("runs").fg(TableColor::Cyan),
-                            Cell::new("status").fg(TableColor::Cyan),
-                        ]);
+        Commands::Cron { action } => {
+            match action.unwrap_or(CronAction::List) {
+                CronAction::List => {
+                    let resp = IpcClient::send_request(Request::CronList).await?;
+                    if let Response::CronList { jobs } = resp {
+                        if jobs.is_empty() {
+                            println!("\nNo scheduled cron jobs found.\nAdd one in ghive.toml using `cron = \"...\"` or `ghive start --cron \"...\"`\n");
+                        } else {
+                            let mut table = Table::new();
+                            table
+                                .load_preset(UTF8_ROUND_CORNERS)
+                                .set_content_arrangement(ContentArrangement::Dynamic)
+                                .set_header(vec![
+                                    Cell::new("name").fg(TableColor::Cyan),
+                                    Cell::new("schedule").fg(TableColor::Cyan),
+                                    Cell::new("command").fg(TableColor::Cyan),
+                                    Cell::new("next run").fg(TableColor::Cyan),
+                                    Cell::new("last run").fg(TableColor::Cyan),
+                                    Cell::new("runs").fg(TableColor::Cyan),
+                                    Cell::new("status").fg(TableColor::Cyan),
+                                ]);
 
-                    for j in jobs {
-                        let next_str = j
-                            .next_run
-                            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-                            .unwrap_or("-".into());
-                        let last_str = j
-                            .last_run
-                            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-                            .unwrap_or("-".into());
+                            for j in jobs {
+                                let next_str = if j.paused {
+                                    "Paused".to_string()
+                                } else {
+                                    j.next_run
+                                        .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                                        .unwrap_or("-".into())
+                                };
+                                let last_str = j
+                                    .last_run
+                                    .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                                    .unwrap_or("-".into());
 
-                        table.add_row(vec![
-                            Cell::new(j.name),
-                            Cell::new(j.expression),
-                            Cell::new(j.command),
-                            Cell::new(next_str),
-                            Cell::new(last_str),
-                            Cell::new(j.runs_count),
-                            Cell::new(j.last_status),
-                        ]);
+                                let status_cell = if j.paused || j.last_status == "Stopped" {
+                                    Cell::new(&j.last_status).fg(TableColor::Yellow)
+                                } else if j.last_status == "Success" {
+                                    Cell::new(&j.last_status).fg(TableColor::Green)
+                                } else if j.last_status.starts_with("Failed") || j.last_status.starts_with("Error") {
+                                    Cell::new(&j.last_status).fg(TableColor::Red)
+                                } else {
+                                    Cell::new(&j.last_status)
+                                };
+
+                                table.add_row(vec![
+                                    Cell::new(j.name),
+                                    Cell::new(j.expression),
+                                    Cell::new(j.command),
+                                    Cell::new(next_str),
+                                    Cell::new(last_str),
+                                    Cell::new(j.runs_count),
+                                    status_cell,
+                                ]);
+                            }
+                            println!("\n{}\n", table);
+                        }
                     }
-                    println!("\n{}\n", table);
+                }
+                CronAction::Stop { name } => {
+                    let resp = IpcClient::send_request(Request::CronStop(name)).await?;
+                    print_response(resp);
+                }
+                CronAction::Restart { name } => {
+                    let resp = IpcClient::send_request(Request::CronRestart(name)).await?;
+                    print_response(resp);
+                }
+                CronAction::Delete { name } => {
+                    let resp = IpcClient::send_request(Request::CronDelete(name)).await?;
+                    print_response(resp);
                 }
             }
         }
@@ -628,6 +714,7 @@ async fn main() -> Result<()> {
             interpreter,
             envs,
             args,
+            cron,
         } => {
             let target_path = Path::new(&target);
 
@@ -685,13 +772,25 @@ async fn main() -> Result<()> {
                     env_map.insert(k, v);
                 }
 
+                let final_cwd = cwd.or_else(|| std::env::current_dir().ok());
                 let final_interpreter = interpreter.or(detected.interpreter);
+
+                let script_path = Path::new(&detected.script);
+                let final_script = if script_path.exists() {
+                    if let Ok(abs) = script_path.canonicalize() {
+                        abs.to_string_lossy().to_string()
+                    } else {
+                        detected.script
+                    }
+                } else {
+                    detected.script
+                };
 
                 let config = ProcessConfig {
                     name: app_name,
-                    script: detected.script,
+                    script: final_script,
                     args: detected.args,
-                    cwd,
+                    cwd: final_cwd,
                     exec_mode,
                     instances: instance_count,
                     autorestart: true,
@@ -705,7 +804,7 @@ async fn main() -> Result<()> {
                     interpreter: final_interpreter,
                     out_log: None,
                     err_log: None,
-                    cron: None,
+                    cron: cron.clone(),
                     user: None,
                     group: None,
                     cgroup_memory_max: None,
@@ -716,8 +815,14 @@ async fn main() -> Result<()> {
                     idle_timeout_secs: None,
                 };
 
+                let is_cron = cron.is_some();
                 let resp = IpcClient::send_request(Request::Start(config)).await?;
                 print_response(resp);
+
+                if is_cron {
+                    println!("View all scheduled jobs anytime with: {}\n", "ghive cron".bold());
+                    return Ok(());
+                }
             }
 
             // Show updated process table
@@ -738,11 +843,16 @@ async fn main() -> Result<()> {
             print_process_table(false).await?;
         }
 
-        Commands::Reload { target, timeout } => {
+        Commands::Reload {
+            target,
+            timeout,
+            delay,
+        } => {
             let selector = TargetSelector::parse(&target);
             let resp = IpcClient::send_request(Request::Reload {
                 target: selector,
                 graceful_timeout_ms: Some(timeout),
+                readiness_delay_ms: Some(delay),
             })
             .await?;
             print_response(resp);

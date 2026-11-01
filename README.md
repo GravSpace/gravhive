@@ -36,6 +36,24 @@
 - **Multi-Server Mesh & Centralized Management (`ghive mesh`):** Hubungkan banyak server Gravhive ke dalam jaringan mesh terpadu. Pantau agregat proses dan kesehatan CPU/RAM seluruh node dari satu terminal pusat.
 - **In-Memory Secret Vault & AES-256-GCM Encryption (`ghive secrets`):** Enkripsi kuat untuk file konfigurasi `.env` (`.env.enc`) dan vault terenkripsi dengan penyamaran otomatis (_credential redaction_) di log dan `describe`.
 - **On-Demand CPU & Memory Profiling (`ghive profile`):** Generator _interactive SVG Flamegraph_ bawaan tanpa dependensi luar untuk mendiagnosis bottleneck CPU dan memory leak pada aplikasi produksi secara real-time.
+- **Built-in Self-Upgrade (`ghive upgrade`):** Memperbarui biner `ghive` dan `ghived` secara atomik langsung dari rilis resmi GitHub hanya dengan satu perintah tanpa perlu kompilasi ulang manual.
+
+---
+
+## ⚡ Performance Benchmark (Gravhive vs PM2)
+
+Gravhive dirancang dari awal menggunakan 100% Rust murni tanpa dependensi runtime JavaScript/V8. Berikut adalah hasil pengujian komparatif otomatis pada sistem nyata:
+
+| Metrik Evaluasi | Gravhive (100% Rust) | PM2 (Node.js / V8) | Keunggulan Gravhive |
+| :--- | :---: | :---: | :---: |
+| **Daemon Idle Memory (RSS)** | **12.25 MB** | 63.77 MB | **5.2x lebih hemat** |
+| **Daemon Memory (4 Workers)** | **8.47 MB** | 61.77 MB | **7.3x lebih hemat** |
+| **Daemon Cold Boot Time** | **131 ms** | 403 ms | **3.1x lebih cepat** |
+| **Spawn 4 Workers** | **25 ms** | 484 ms | **19.4x lebih cepat** |
+| **Zero-Downtime Reload (4 Workers)** | **348 ms** | 668 ms | **1.9x lebih cepat** |
+| **CLI Query Round-trip Latency** | **8 ms** | 155 ms | **19.4x lebih responsif** |
+
+> Laporan analisis teknis lengkap dapat dilihat di [BENCHMARK.md](BENCHMARK.md). Anda dapat mereproduksi pengujian performa ini secara lokal kapan saja dengan menjalankan `./benchmarks/run.sh`.
 
 ---
 
@@ -161,6 +179,9 @@ ghive restart all
 # Zero-downtime rolling reload (khusus cluster mode)
 ghive reload bun-web
 
+# Kustomisasi reload: jeda stabilisasi (ms) dan batas graceful shutdown (ms)
+ghive reload bun-web --delay 50 --timeout 3000
+
 # Menghapus proses dari pengawasan
 ghive delete api-gateway
 ghive delete all
@@ -216,11 +237,67 @@ ghive deploy staging
 ghive deploy local
 ```
 
-### 9. Scheduled Background Jobs (`ghive cron`)
+### 9. Scheduled Background Jobs (`ghive cron`) ⏰
 
+Gravhive memiliki scheduler cron bawaan tanpa membutuhkan crontab OS. Anda dapat membuat cron job dengan 2 cara:
+
+#### Cara 1: Langsung dari CLI (`ghive start --cron`)
 ```bash
-# Melihat daftar job berkala yang sedang terjadwal dan status eksekusinya
+# Menjalankan script backup setiap jam 02:00 pagi
+ghive start "python3 scripts/backup.py" --name "nightly-backup" --cron "0 2 * * *"
+
+# Menjalankan pembersihan cache setiap 5 menit
+ghive start "node clean-cache.js" --name "cache-cleaner" --cron "*/5 * * * *"
+
+# Menjalankan health check setiap 30 detik (format 6-field dengan detik)
+ghive start "curl -s http://localhost:8080/health" --name "health-ping" --cron "*/30 * * * * *"
+```
+
+#### Cara 2: Melalui File Konfigurasi (`ghive.toml`)
+```toml
+[app.nightly-backup]
+script = "python3 scripts/backup.py"
+cron = "0 2 * * *"                  # Berjalan otomatis setiap jam 02:00 pagi
+```
+
+#### Melihat Status & Riwayat Eksekusi Cron:
+```bash
+# Menampilkan tabel semua scheduled jobs
 ghive cron
+# atau
+ghive cron list
+```
+Output menampilkan nama job, jadwal ekspresi, jadwal eksekusi berikutnya (*next run*), waktu eksekusi terakhir (*last run*), jumlah eksekusi (*runs count*), dan status (*Scheduled*, *Running*, *Stopped*, atau *Success* / *Failed*).
+
+#### Menghentikan (Pause) & Melanjutkan Cron Job:
+```bash
+# Hentikan/pause satu cron job
+ghive cron stop nightly-backup
+
+# Atau hentikan semua cron job sekaligus
+ghive cron stop all
+
+# Lanjutkan/restart cron job yang sedang di-pause
+ghive cron restart nightly-backup
+ghive cron restart all
+```
+
+#### Menghapus Cron Job:
+```bash
+# Hapus cron job dari scheduler
+ghive cron delete nightly-backup
+# alias cepat:
+ghive cron rm nightly-backup
+
+# Atau hapus semua cron job
+ghive cron delete all
+```
+> **Tips:** Anda juga dapat menggunakan perintah standar `ghive stop <nama-cron>` dan `ghive delete <nama-cron>` secara langsung. Gravhive otomatis mendeteksi jika target merupakan cron job.
+
+#### Melihat Log Eksekusi Cron:
+Log keluaran (*stdout* & *stderr*) setiap eksekusi cron otomatis tersimpan di ring buffer terpisah dan dapat dilihat dengan:
+```bash
+ghive logs cron:nightly-backup -n 50
 ```
 
 ### 10. WebAssembly Plugins (`ghive plugins`)
@@ -283,6 +360,30 @@ ghive profile bun-web --duration 5 --mode memory --output flamegraph-memory.svg
 
 # File SVG yang dihasilkan dapat langsung dibuka di browser web apa pun (Chrome, Safari, Firefox)
 # dengan fitur interaktif: zoom in/out frame alokasi, pencarian stack trace, dan hover info.
+```
+
+### 14. Pembaruan Otomatis Biner (`ghive upgrade` / `ghive update`) 🚀
+
+Gravhive dilengkapi dengan modul *self-upgrade* bawaan yang mengunduh dan memasang versi terbaru secara otomatis langsung dari GitHub Releases:
+
+```bash
+# 1. Periksa apakah ada versi baru tanpa mengunduh
+ghive upgrade --check
+
+# 2. Upgrade Gravhive ke versi rilis terbaru
+ghive upgrade
+# (atau gunakan alias)
+ghive update
+
+# 3. Upgrade atau beralih ke versi spesifik (misal v0.2.0)
+ghive upgrade --to 0.2.0
+
+# 4. Paksa instalasi ulang versi saat ini
+ghive upgrade --force
+
+# Catatan: Jika Gravhive diinstal di direktori sistem (/usr/local/bin),
+# jalankan dengan hak akses administrator:
+# sudo ghive upgrade
 ```
 
 ---

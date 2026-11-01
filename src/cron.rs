@@ -22,6 +22,8 @@ pub struct CronJobInfo {
     pub next_run: Option<DateTime<Utc>>,
     pub runs_count: u64,
     pub last_status: String,
+    #[serde(default)]
+    pub paused: bool,
 }
 
 pub struct CronJob {
@@ -34,6 +36,7 @@ pub struct CronJob {
     pub next_run: Option<DateTime<Utc>>,
     pub runs_count: u64,
     pub last_status: String,
+    pub paused: bool,
 }
 
 #[derive(Clone)]
@@ -57,7 +60,13 @@ impl CronManager {
         command: &str,
         args: &[String],
     ) -> Result<()> {
-        let schedule = Schedule::from_str(expression)
+        let normalized = if expression.split_whitespace().count() == 5 {
+            format!("0 {}", expression)
+        } else {
+            expression.to_string()
+        };
+
+        let schedule = Schedule::from_str(&normalized)
             .with_context(|| format!("Invalid cron expression '{}'", expression))?;
 
         let next_run = schedule.upcoming(Utc).next();
@@ -72,6 +81,7 @@ impl CronManager {
             next_run,
             runs_count: 0,
             last_status: "Scheduled".to_string(),
+            paused: false,
         };
 
         let mut lock = self.jobs.write().await;
@@ -81,6 +91,67 @@ impl CronManager {
             name, expression, next_run
         );
         Ok(())
+    }
+
+    pub async fn stop_job(&self, name: &str) -> Result<usize> {
+        let mut lock = self.jobs.write().await;
+        if name == "all" {
+            let mut count = 0;
+            for job in lock.values_mut() {
+                if !job.paused {
+                    job.paused = true;
+                    job.last_status = "Stopped".to_string();
+                    count += 1;
+                }
+            }
+            info!("[CRON] Stopped all ({}) cron jobs", count);
+            Ok(count)
+        } else if let Some(job) = lock.get_mut(name) {
+            job.paused = true;
+            job.last_status = "Stopped".to_string();
+            info!("[CRON] Stopped cron job '{}'", name);
+            Ok(1)
+        } else {
+            anyhow::bail!("Cron job '{}' not found", name);
+        }
+    }
+
+    pub async fn restart_job(&self, name: &str) -> Result<usize> {
+        let mut lock = self.jobs.write().await;
+        if name == "all" {
+            let mut count = 0;
+            for job in lock.values_mut() {
+                job.paused = false;
+                job.last_status = "Scheduled".to_string();
+                job.next_run = job.schedule.upcoming(Utc).next();
+                count += 1;
+            }
+            info!("[CRON] Resumed all ({}) cron jobs", count);
+            Ok(count)
+        } else if let Some(job) = lock.get_mut(name) {
+            job.paused = false;
+            job.last_status = "Scheduled".to_string();
+            job.next_run = job.schedule.upcoming(Utc).next();
+            info!("[CRON] Resumed cron job '{}'", name);
+            Ok(1)
+        } else {
+            anyhow::bail!("Cron job '{}' not found", name);
+        }
+    }
+
+    pub async fn delete_job(&self, name: &str) -> Result<usize> {
+        let mut lock = self.jobs.write().await;
+        if name == "all" {
+            let count = lock.len();
+            lock.clear();
+            info!("[CRON] Deleted all ({}) cron jobs", count);
+            Ok(count)
+        } else if lock.remove(name).is_some() {
+            info!("[CRON] Deleted cron job '{}'", name);
+            Ok(1)
+        } else {
+            anyhow::bail!("Cron job '{}' not found", name);
+        }
     }
 
     pub async fn list_jobs(&self) -> Vec<CronJobInfo> {
@@ -94,6 +165,7 @@ impl CronManager {
                 next_run: j.next_run,
                 runs_count: j.runs_count,
                 last_status: j.last_status.clone(),
+                paused: j.paused,
             })
             .collect()
     }
@@ -109,6 +181,9 @@ impl CronManager {
                 {
                     let mut lock = self.jobs.write().await;
                     for job in lock.values_mut() {
+                        if job.paused {
+                            continue;
+                        }
                         if let Some(next) = job.next_run {
                             if now >= next {
                                 job.last_run = Some(now);
@@ -186,11 +261,61 @@ impl CronManager {
 
                         let mut lock = jobs_lock.write().await;
                         if let Some(j) = lock.get_mut(&name) {
-                            j.last_status = status_str;
+                            if !j.paused {
+                                j.last_status = status_str;
+                            }
                         }
                     });
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cron_crud_lifecycle() {
+        let hub = LogHub::new(100);
+        let cron = CronManager::new(hub);
+
+        // 1. Add job
+        cron.add_job("cleanup", "0 */10 * * * *", "echo", &["done".into()])
+            .await
+            .expect("Failed to add job");
+
+        let jobs = cron.list_jobs().await;
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].name, "cleanup");
+        assert!(!jobs[0].paused);
+        assert_eq!(jobs[0].last_status, "Scheduled");
+
+        // 2. Stop job
+        let count = cron.stop_job("cleanup").await.expect("Failed to stop job");
+        assert_eq!(count, 1);
+        let jobs = cron.list_jobs().await;
+        assert!(jobs[0].paused);
+        assert_eq!(jobs[0].last_status, "Stopped");
+
+        // 3. Resume job
+        let count = cron
+            .restart_job("cleanup")
+            .await
+            .expect("Failed to restart job");
+        assert_eq!(count, 1);
+        let jobs = cron.list_jobs().await;
+        assert!(!jobs[0].paused);
+        assert_eq!(jobs[0].last_status, "Scheduled");
+
+        // 4. Delete job
+        let count = cron
+            .delete_job("cleanup")
+            .await
+            .expect("Failed to delete job");
+        assert_eq!(count, 1);
+        let jobs = cron.list_jobs().await;
+        assert_eq!(jobs.len(), 0);
     }
 }

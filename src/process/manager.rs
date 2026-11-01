@@ -125,7 +125,12 @@ impl ProcessManager {
         Ok(affected)
     }
 
-    pub async fn reload(&mut self, target: &TargetSelector, timeout: Duration) -> Result<usize> {
+    pub async fn reload(
+        &mut self,
+        target: &TargetSelector,
+        timeout: Duration,
+        stabilization_delay: Duration,
+    ) -> Result<usize> {
         // Zero-Downtime Rolling Reload
         // Target can be a cluster app
         let target_workers: Vec<(u32, String, usize, ProcessConfig)> = self
@@ -147,7 +152,7 @@ impl ProcessManager {
                 app_name, instance_idx
             );
 
-            // 1. Spawn new worker
+            // 1. Spawn new replacement worker
             let new_id = self.next_id;
             self.next_id += 1;
 
@@ -164,13 +169,28 @@ impl ProcessManager {
                 continue;
             }
 
-            // 2. Allow brief readiness stabilization
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            // 2. Allow brief readiness stabilization & verify process is still alive
+            if !stabilization_delay.is_zero() {
+                tokio::time::sleep(stabilization_delay).await;
+            }
 
-            // 3. Stop old worker
+            // Health check: did the replacement worker crash immediately on boot?
+            let crashed = matches!(new_worker.try_wait().await, Ok(Some(_)));
+
+            if crashed {
+                error!(
+                    "Replacement worker #{} crashed immediately during reload! Aborting replacement for instance {} to preserve uptime.",
+                    new_id, instance_idx
+                );
+                continue;
+            }
+
+            // 3. Gracefully stop old worker in background so reload doesn't block
             if let Some(pos) = self.workers.iter().position(|w| w.id == old_id) {
                 let mut old_worker = self.workers.remove(pos);
-                let _ = old_worker.stop(timeout).await;
+                tokio::spawn(async move {
+                    let _ = old_worker.stop(timeout).await;
+                });
             }
 
             self.workers.push(new_worker);
