@@ -603,79 +603,79 @@ async fn main() -> Result<()> {
     ensure_daemon_running().await?;
 
     match cli.command {
-        Commands::Cron { action } => {
-            match action.unwrap_or(CronAction::List) {
-                CronAction::List => {
-                    let resp = IpcClient::send_request(Request::CronList).await?;
-                    if let Response::CronList { jobs } = resp {
-                        if jobs.is_empty() {
-                            println!("\nNo scheduled cron jobs found.\nAdd one in ghive.toml using `cron = \"...\"` or `ghive start --cron \"...\"`\n");
-                        } else {
-                            let mut table = Table::new();
-                            table
-                                .load_preset(UTF8_ROUND_CORNERS)
-                                .set_content_arrangement(ContentArrangement::Dynamic)
-                                .set_header(vec![
-                                    Cell::new("name").fg(TableColor::Cyan),
-                                    Cell::new("schedule").fg(TableColor::Cyan),
-                                    Cell::new("command").fg(TableColor::Cyan),
-                                    Cell::new("next run").fg(TableColor::Cyan),
-                                    Cell::new("last run").fg(TableColor::Cyan),
-                                    Cell::new("runs").fg(TableColor::Cyan),
-                                    Cell::new("status").fg(TableColor::Cyan),
-                                ]);
+        Commands::Cron { action } => match action.unwrap_or(CronAction::List) {
+            CronAction::List => {
+                let resp = IpcClient::send_request(Request::CronList).await?;
+                if let Response::CronList { jobs } = resp {
+                    if jobs.is_empty() {
+                        println!("\nNo scheduled cron jobs found.\nAdd one in ghive.toml using `cron = \"...\"` or `ghive start --cron \"...\"`\n");
+                    } else {
+                        let mut table = Table::new();
+                        table
+                            .load_preset(UTF8_ROUND_CORNERS)
+                            .set_content_arrangement(ContentArrangement::Dynamic)
+                            .set_header(vec![
+                                Cell::new("name").fg(TableColor::Cyan),
+                                Cell::new("schedule").fg(TableColor::Cyan),
+                                Cell::new("command").fg(TableColor::Cyan),
+                                Cell::new("next run").fg(TableColor::Cyan),
+                                Cell::new("last run").fg(TableColor::Cyan),
+                                Cell::new("runs").fg(TableColor::Cyan),
+                                Cell::new("status").fg(TableColor::Cyan),
+                            ]);
 
-                            for j in jobs {
-                                let next_str = if j.paused {
-                                    "Paused".to_string()
-                                } else {
-                                    j.next_run
-                                        .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-                                        .unwrap_or("-".into())
-                                };
-                                let last_str = j
-                                    .last_run
+                        for j in jobs {
+                            let next_str = if j.paused {
+                                "Paused".to_string()
+                            } else {
+                                j.next_run
                                     .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-                                    .unwrap_or("-".into());
+                                    .unwrap_or("-".into())
+                            };
+                            let last_str = j
+                                .last_run
+                                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                                .unwrap_or("-".into());
 
-                                let status_cell = if j.paused || j.last_status == "Stopped" {
-                                    Cell::new(&j.last_status).fg(TableColor::Yellow)
-                                } else if j.last_status == "Success" {
-                                    Cell::new(&j.last_status).fg(TableColor::Green)
-                                } else if j.last_status.starts_with("Failed") || j.last_status.starts_with("Error") {
-                                    Cell::new(&j.last_status).fg(TableColor::Red)
-                                } else {
-                                    Cell::new(&j.last_status)
-                                };
+                            let status_cell = if j.paused || j.last_status == "Stopped" {
+                                Cell::new(&j.last_status).fg(TableColor::Yellow)
+                            } else if j.last_status == "Success" {
+                                Cell::new(&j.last_status).fg(TableColor::Green)
+                            } else if j.last_status.starts_with("Failed")
+                                || j.last_status.starts_with("Error")
+                            {
+                                Cell::new(&j.last_status).fg(TableColor::Red)
+                            } else {
+                                Cell::new(&j.last_status)
+                            };
 
-                                table.add_row(vec![
-                                    Cell::new(j.name),
-                                    Cell::new(j.expression),
-                                    Cell::new(j.command),
-                                    Cell::new(next_str),
-                                    Cell::new(last_str),
-                                    Cell::new(j.runs_count),
-                                    status_cell,
-                                ]);
-                            }
-                            println!("\n{}\n", table);
+                            table.add_row(vec![
+                                Cell::new(j.name),
+                                Cell::new(j.expression),
+                                Cell::new(j.command),
+                                Cell::new(next_str),
+                                Cell::new(last_str),
+                                Cell::new(j.runs_count),
+                                status_cell,
+                            ]);
                         }
+                        println!("\n{}\n", table);
                     }
                 }
-                CronAction::Stop { name } => {
-                    let resp = IpcClient::send_request(Request::CronStop(name)).await?;
-                    print_response(resp);
-                }
-                CronAction::Restart { name } => {
-                    let resp = IpcClient::send_request(Request::CronRestart(name)).await?;
-                    print_response(resp);
-                }
-                CronAction::Delete { name } => {
-                    let resp = IpcClient::send_request(Request::CronDelete(name)).await?;
-                    print_response(resp);
-                }
             }
-        }
+            CronAction::Stop { name } => {
+                let resp = IpcClient::send_request(Request::CronStop(name)).await?;
+                print_response(resp);
+            }
+            CronAction::Restart { name } => {
+                let resp = IpcClient::send_request(Request::CronRestart(name)).await?;
+                print_response(resp);
+            }
+            CronAction::Delete { name } => {
+                let resp = IpcClient::send_request(Request::CronDelete(name)).await?;
+                print_response(resp);
+            }
+        },
 
         Commands::Plugins => {
             let resp = IpcClient::send_request(Request::PluginList).await?;
@@ -820,7 +820,10 @@ async fn main() -> Result<()> {
                 print_response(resp);
 
                 if is_cron {
-                    println!("View all scheduled jobs anytime with: {}\n", "ghive cron".bold());
+                    println!(
+                        "View all scheduled jobs anytime with: {}\n",
+                        "ghive cron".bold()
+                    );
                     return Ok(());
                 }
             }

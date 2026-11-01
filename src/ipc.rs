@@ -118,7 +118,10 @@ async fn handle_client(
 
                 if let Some(ref expr) = config.cron {
                     if let Some(ref cron) = cron_manager {
-                        match cron.add_job(&app_name, expr, &config.script, &config.args).await {
+                        match cron
+                            .add_job(&app_name, expr, &config.script, &config.args)
+                            .await
+                        {
                             Ok(()) => {
                                 let resp = Response::Ok {
                                     message: format!(
@@ -130,7 +133,10 @@ async fn handle_client(
                             }
                             Err(e) => {
                                 let resp = Response::Error {
-                                    message: format!("Failed to schedule cron job '{}': {}", app_name, e),
+                                    message: format!(
+                                        "Failed to schedule cron job '{}': {}",
+                                        app_name, e
+                                    ),
                                 };
                                 writer.send(serde_json::to_string(&resp)?).await?;
                             }
@@ -164,7 +170,10 @@ async fn handle_client(
                     Ok(count) => {
                         if count > 0 {
                             let resp = Response::Ok {
-                                message: format!("Stopped {} process(es) matching {}", count, target),
+                                message: format!(
+                                    "Stopped {} process(es) matching {}",
+                                    count, target
+                                ),
                             };
                             writer.send(serde_json::to_string(&resp)?).await?;
                         } else if let Some(ref cron) = cron_manager {
@@ -176,7 +185,10 @@ async fn handle_client(
                             if let Some(name) = cron_name {
                                 if let Ok(c) = cron.stop_job(name).await {
                                     let resp = Response::Ok {
-                                        message: format!("Stopped {} cron job(s) matching '{}'", c, name),
+                                        message: format!(
+                                            "Stopped {} cron job(s) matching '{}'",
+                                            c, name
+                                        ),
                                     };
                                     writer.send(serde_json::to_string(&resp)?).await?;
                                     continue;
@@ -207,7 +219,10 @@ async fn handle_client(
                     Ok(count) => {
                         if count > 0 {
                             let resp = Response::Ok {
-                                message: format!("Restarted {} process(es) matching {}", count, target),
+                                message: format!(
+                                    "Restarted {} process(es) matching {}",
+                                    count, target
+                                ),
                             };
                             writer.send(serde_json::to_string(&resp)?).await?;
                         } else if let Some(ref cron) = cron_manager {
@@ -219,7 +234,10 @@ async fn handle_client(
                             if let Some(name) = cron_name {
                                 if let Ok(c) = cron.restart_job(name).await {
                                     let resp = Response::Ok {
-                                        message: format!("Resumed {} cron job(s) matching '{}'", c, name),
+                                        message: format!(
+                                            "Resumed {} cron job(s) matching '{}'",
+                                            c, name
+                                        ),
                                     };
                                     writer.send(serde_json::to_string(&resp)?).await?;
                                     continue;
@@ -276,7 +294,10 @@ async fn handle_client(
                     Ok(count) => {
                         if count > 0 {
                             let resp = Response::Ok {
-                                message: format!("Deleted {} process(es) matching {}", count, target),
+                                message: format!(
+                                    "Deleted {} process(es) matching {}",
+                                    count, target
+                                ),
                             };
                             writer.send(serde_json::to_string(&resp)?).await?;
                         } else if let Some(ref cron) = cron_manager {
@@ -288,7 +309,10 @@ async fn handle_client(
                             if let Some(name) = cron_name {
                                 if let Ok(c) = cron.delete_job(name).await {
                                     let resp = Response::Ok {
-                                        message: format!("Deleted {} cron job(s) matching '{}'", c, name),
+                                        message: format!(
+                                            "Deleted {} cron job(s) matching '{}'",
+                                            c, name
+                                        ),
                                     };
                                     writer.send(serde_json::to_string(&resp)?).await?;
                                     continue;
@@ -428,7 +452,10 @@ async fn handle_client(
                     match cron.stop_job(&name).await {
                         Ok(count) => {
                             let resp = Response::Ok {
-                                message: format!("Stopped {} cron job(s) matching '{}'", count, name),
+                                message: format!(
+                                    "Stopped {} cron job(s) matching '{}'",
+                                    count, name
+                                ),
                             };
                             writer.send(serde_json::to_string(&resp)?).await?;
                         }
@@ -451,7 +478,10 @@ async fn handle_client(
                     match cron.restart_job(&name).await {
                         Ok(count) => {
                             let resp = Response::Ok {
-                                message: format!("Resumed {} cron job(s) matching '{}'", count, name),
+                                message: format!(
+                                    "Resumed {} cron job(s) matching '{}'",
+                                    count, name
+                                ),
                             };
                             writer.send(serde_json::to_string(&resp)?).await?;
                         }
@@ -474,7 +504,10 @@ async fn handle_client(
                     match cron.delete_job(&name).await {
                         Ok(count) => {
                             let resp = Response::Ok {
-                                message: format!("Deleted {} cron job(s) matching '{}'", count, name),
+                                message: format!(
+                                    "Deleted {} cron job(s) matching '{}'",
+                                    count, name
+                                ),
                             };
                             writer.send(serde_json::to_string(&resp)?).await?;
                         }
