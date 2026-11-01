@@ -1,0 +1,12 @@
+pub mod common;
+pub mod config;
+pub mod detector;
+pub mod ipc;
+pub mod model;
+pub mod process;
+pub mod protocol;
+pub mod ring_buffer;
+pub mod startup;
+pub mod tui;
+pub mod watchdog;
+pub mod watcher;

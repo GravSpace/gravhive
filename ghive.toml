@@ -1,0 +1,24 @@
+# Gravhive Ecosystem Configuration File (ghive.toml)
+# Run with: ghive start ghive.toml
+
+[app.web-service]
+script = "app.js"                   # Script entry point, command, or native binary
+name = "web-service"                # Application name
+instances = "max"                   # "max" or fixed number of workers
+exec_mode = "cluster"               # "cluster" or "fork"
+autorestart = true                  # Auto-restart on crash
+max_memory_restart = "300MB"        # Automatic restart if RSS exceeds threshold
+watch = false                       # Set to true for live file watching
+env = { NODE_ENV = "production", PORT = "8080" }
+
+[app.web-service.log]
+out = "logs/web-out.log"
+err = "logs/web-err.log"
+
+[app.worker-service]
+script = "./target/release/worker"
+exec_mode = "fork"
+instances = 1
+autorestart = true
+max_restarts = 10
+env = { WORKER_THREADS = "4" }
