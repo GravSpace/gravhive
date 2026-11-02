@@ -15,13 +15,17 @@ use gravhive::model::{
     format_duration, format_memory_bytes, parse_memory_string, ExecMode, LogStreamType,
     ProcessConfig, ProcessStatus, TargetSelector,
 };
+use gravhive::process::ProcessManager;
 use gravhive::protocol::{Request, Response};
+use gravhive::ring_buffer::LogHub;
 use gravhive::startup::{generate_startup_script, remove_startup_script};
 use gravhive::tui::run_monit;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
 
 #[derive(Parser)]
 #[command(
@@ -70,6 +74,68 @@ enum Commands {
         /// Environment variables in KEY=VAL format
         #[arg(short, long = "env", value_parser = parse_key_val)]
         envs: Vec<(String, String)>,
+
+        /// Load environment variables from file (.env or encrypted .env.enc)
+        #[arg(long)]
+        env_file: Option<PathBuf>,
+
+        /// Run in foreground mode without connecting to background daemon (ideal for containers)
+        #[arg(long)]
+        no_daemon: bool,
+
+        /// Disable automatic restart upon process exit
+        #[arg(long)]
+        no_autorestart: bool,
+
+        /// Arguments passed to the target script
+        #[arg(last = true)]
+        args: Vec<String>,
+
+        /// Scheduled cron expression (e.g. "0 */5 * * * *" or "0 2 * * *")
+        #[arg(long)]
+        cron: Option<String>,
+    },
+
+    /// Run an application directly in foreground mode (ideal for Docker containers as PID 1)
+    Run {
+        /// Target script file (e.g. app.js, main.py), executable, or ecosystem config (e.g. ghive.toml)
+        target: String,
+
+        /// Number of worker instances (e.g. 1, 4, or 'max')
+        #[arg(short = 'i', long)]
+        instances: Option<String>,
+
+        /// Custom process name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Watch source directory for file modifications and auto-reload
+        #[arg(short, long)]
+        watch: bool,
+
+        /// Maximum memory limit for automatic restart (e.g. "300MB", "1GB")
+        #[arg(long)]
+        max_memory_restart: Option<String>,
+
+        /// Custom working directory
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+
+        /// Custom interpreter override (e.g. node, bun, python3, php)
+        #[arg(long)]
+        interpreter: Option<String>,
+
+        /// Environment variables in KEY=VAL format
+        #[arg(short, long = "env", value_parser = parse_key_val)]
+        envs: Vec<(String, String)>,
+
+        /// Load environment variables from file (.env or encrypted .env.enc)
+        #[arg(long)]
+        env_file: Option<PathBuf>,
+
+        /// Disable automatic restart upon process exit
+        #[arg(long)]
+        no_autorestart: bool,
 
         /// Arguments passed to the target script
         #[arg(last = true)]
@@ -253,6 +319,71 @@ enum Commands {
     Webhook {
         #[command(subcommand)]
         action: Option<WebhookAction>,
+    },
+
+    /// Scale application worker instances dynamically up or down
+    Scale {
+        /// Target application name
+        app: String,
+
+        /// Target instances count or delta (e.g. 4, +2, or -1)
+        #[arg(allow_hyphen_values = true)]
+        instances: String,
+    },
+
+    /// Trigger log rotation and gzip compression for application log files
+    Logrotate {
+        /// Target process ID, name, or 'all' (default: all)
+        #[arg(default_value = "all")]
+        target: String,
+    },
+
+    /// Expose Prometheus metrics on HTTP endpoint (default port 9615)
+    Metrics {
+        /// Port to serve Prometheus metrics on
+        #[arg(short, long, default_value = "9615")]
+        port: u16,
+    },
+
+    /// Clean up dead processes (stopped/errored) and delete orphaned log files
+    Prune {
+        /// Preview what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Force cleanup without confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+
+        /// Only clean orphaned log files, leave stopped processes intact
+        #[arg(long)]
+        only_logs: bool,
+    },
+
+    /// Run comprehensive environment, system resource, and runtime diagnostics
+    Doctor,
+
+    /// Validate ecosystem configuration file (syntax, paths, cron, ports)
+    #[command(alias = "check")]
+    Validate {
+        /// Path to configuration file (default: ghive.toml)
+        #[arg(default_value = "ghive.toml")]
+        config: PathBuf,
+    },
+
+    /// View chronological lifecycle events and audit timeline
+    #[command(alias = "history")]
+    Events {
+        /// Target application name (optional, default: all)
+        target: Option<String>,
+
+        /// Number of events to display
+        #[arg(short = 'n', long, default_value = "30")]
+        limit: usize,
+
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -702,6 +833,82 @@ async fn main() -> Result<()> {
             handle_webhook_command(action).await?;
             return Ok(());
         }
+        Commands::Metrics { port } => {
+            gravhive::metrics::start_metrics_server(port).await?;
+            return Ok(());
+        }
+        Commands::Doctor => {
+            let items = gravhive::doctor::Doctor::run_diagnostics().await;
+            gravhive::doctor::Doctor::print_report(&items);
+            return Ok(());
+        }
+        Commands::Validate { config } => {
+            gravhive::validator::ConfigValidator::validate_and_exit(&config)?;
+            return Ok(());
+        }
+        Commands::Run {
+            target,
+            instances,
+            name,
+            watch,
+            max_memory_restart,
+            cwd,
+            interpreter,
+            envs,
+            env_file,
+            no_autorestart,
+            args,
+            cron,
+        } => {
+            let configs = prepare_process_configs(
+                &target,
+                name,
+                instances,
+                watch,
+                max_memory_restart,
+                cwd,
+                interpreter,
+                envs,
+                env_file,
+                no_autorestart,
+                args,
+                cron,
+            )?;
+            run_foreground(configs).await?;
+            return Ok(());
+        }
+        Commands::Start {
+            ref target,
+            ref instances,
+            ref name,
+            watch,
+            ref max_memory_restart,
+            ref cwd,
+            ref interpreter,
+            ref envs,
+            ref env_file,
+            no_daemon,
+            no_autorestart,
+            ref args,
+            ref cron,
+        } if no_daemon => {
+            let configs = prepare_process_configs(
+                target,
+                name.clone(),
+                instances.clone(),
+                watch,
+                max_memory_restart.clone(),
+                cwd.clone(),
+                interpreter.clone(),
+                envs.clone(),
+                env_file.clone(),
+                no_autorestart,
+                args.clone(),
+                cron.clone(),
+            )?;
+            run_foreground(configs).await?;
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -819,119 +1026,39 @@ async fn main() -> Result<()> {
             cwd,
             interpreter,
             envs,
+            env_file,
+            no_daemon: _,
+            no_autorestart,
             args,
             cron,
         } => {
-            let target_path = Path::new(&target);
+            let is_cron = cron.is_some();
+            let configs = prepare_process_configs(
+                &target,
+                name,
+                instances,
+                watch,
+                max_memory_restart,
+                cwd,
+                interpreter,
+                envs,
+                env_file,
+                no_autorestart,
+                args,
+                cron,
+            )?;
 
-            // Check if target is a configuration file
-            let is_config_file = target.ends_with(".toml")
-                || target.ends_with(".yaml")
-                || target.ends_with(".yml")
-                || target.ends_with(".json");
-
-            if is_config_file && target_path.exists() {
-                println!(
-                    "{} Loading ecosystem configuration from {}",
-                    "ℹ".cyan(),
-                    target.bold()
-                );
-                let configs = parse_config_file(target_path)?;
-                for cfg in configs {
-                    let resp = IpcClient::send_request(Request::Start(cfg)).await?;
-                    print_response(resp);
-                }
-            } else {
-                // Single application direct execution
-                let detected = detect_runtime(&target, &args);
-
-                let app_name = name.unwrap_or_else(|| {
-                    if let Some(stem) = target_path.file_stem().and_then(|s| s.to_str()) {
-                        stem.to_string()
-                    } else {
-                        "app".to_string()
-                    }
-                });
-
-                let (exec_mode, instance_count) = match instances.as_deref() {
-                    Some("max") => {
-                        let cores = std::thread::available_parallelism()
-                            .map(|p| p.get())
-                            .unwrap_or(2);
-                        (ExecMode::Cluster, cores)
-                    }
-                    Some(num_str) => {
-                        let count = num_str.parse::<usize>().unwrap_or(1);
-                        if count > 1 {
-                            (ExecMode::Cluster, count)
-                        } else {
-                            (ExecMode::Fork, 1)
-                        }
-                    }
-                    None => (ExecMode::Fork, 1),
-                };
-
-                let mem_limit = max_memory_restart.as_deref().and_then(parse_memory_string);
-
-                let mut env_map = HashMap::new();
-                for (k, v) in envs {
-                    env_map.insert(k, v);
-                }
-
-                let final_cwd = cwd.or_else(|| std::env::current_dir().ok());
-                let final_interpreter = interpreter.or(detected.interpreter);
-
-                let script_path = Path::new(&detected.script);
-                let final_script = if script_path.exists() {
-                    if let Ok(abs) = script_path.canonicalize() {
-                        abs.to_string_lossy().to_string()
-                    } else {
-                        detected.script
-                    }
-                } else {
-                    detected.script
-                };
-
-                let config = ProcessConfig {
-                    name: app_name,
-                    script: final_script,
-                    args: detected.args,
-                    cwd: final_cwd,
-                    exec_mode,
-                    instances: instance_count,
-                    autorestart: true,
-                    max_restarts: 15,
-                    restart_delay_ms: 100,
-                    max_memory_restart: mem_limit,
-                    watch,
-                    watch_paths: Vec::new(),
-                    watch_ignore: Vec::new(),
-                    env: env_map,
-                    interpreter: final_interpreter,
-                    out_log: None,
-                    err_log: None,
-                    cron: cron.clone(),
-                    user: None,
-                    group: None,
-                    cgroup_memory_max: None,
-                    cgroup_cpu_max: None,
-                    cgroup_pids_max: None,
-                    listen_port: None,
-                    target_port: None,
-                    idle_timeout_secs: None,
-                };
-
-                let is_cron = cron.is_some();
-                let resp = IpcClient::send_request(Request::Start(config)).await?;
+            for cfg in configs {
+                let resp = IpcClient::send_request(Request::Start(cfg)).await?;
                 print_response(resp);
+            }
 
-                if is_cron {
-                    println!(
-                        "View all scheduled jobs anytime with: {}\n",
-                        "ghive cron".bold()
-                    );
-                    return Ok(());
-                }
+            if is_cron {
+                println!(
+                    "View all scheduled jobs anytime with: {}\n",
+                    "ghive cron".bold()
+                );
+                return Ok(());
             }
 
             // Show updated process table
@@ -1190,6 +1317,175 @@ async fn main() -> Result<()> {
             );
         }
 
+        Commands::Scale { app, instances } => {
+            let resp = IpcClient::send_request(Request::Scale {
+                app: app.clone(),
+                instances,
+            })
+            .await?;
+            match resp {
+                Response::ScaleResult {
+                    app,
+                    previous,
+                    current,
+                } => {
+                    let diff = if current >= previous {
+                        format!("(+{} workers)", current - previous).green()
+                    } else {
+                        format!("(-{} workers)", previous - current).yellow()
+                    };
+                    println!(
+                        "{} App '{}' scaled from {} to {} instances {}",
+                        "✓".green().bold(),
+                        app.bold(),
+                        previous,
+                        current.to_string().bold(),
+                        diff
+                    );
+                    print_process_table(false).await?;
+                }
+                Response::Error { message } => eprintln!("{} {}", "✗".red().bold(), message),
+                _ => {}
+            }
+        }
+
+        Commands::Logrotate { target } => {
+            let selector = TargetSelector::parse(&target);
+            let resp = IpcClient::send_request(Request::LogRotate(selector)).await?;
+            print_response(resp);
+        }
+
+        Commands::Prune {
+            dry_run,
+            force: _,
+            only_logs,
+        } => {
+            let resp = IpcClient::send_request(Request::Prune { dry_run, only_logs }).await?;
+            if let Response::PruneResult {
+                removed_processes,
+                deleted_log_files,
+                freed_bytes,
+            } = resp
+            {
+                println!(
+                    "\n{} Prune Results {}:",
+                    "●".cyan().bold(),
+                    if dry_run {
+                        "(Dry Run - No files or processes deleted)".yellow().bold()
+                    } else {
+                        "".normal()
+                    }
+                );
+                if removed_processes.is_empty() && deleted_log_files.is_empty() {
+                    println!("  Everything is clean. No stopped/errored processes or orphaned logs found.\n");
+                } else {
+                    if !removed_processes.is_empty() {
+                        println!(
+                            "  {} {} dead process(es) {}:",
+                            "•".cyan(),
+                            removed_processes.len(),
+                            if dry_run {
+                                "would be removed"
+                            } else {
+                                "removed"
+                            }
+                        );
+                        for (id, name) in &removed_processes {
+                            println!("    - Worker #{} ({})", id, name.bold());
+                        }
+                    }
+                    if !deleted_log_files.is_empty() {
+                        println!(
+                            "  {} {} orphaned log file(s) {} (freed {}):",
+                            "•".cyan(),
+                            deleted_log_files.len(),
+                            if dry_run {
+                                "would be deleted"
+                            } else {
+                                "deleted"
+                            },
+                            format_memory_bytes(freed_bytes).green().bold()
+                        );
+                        for log_file in &deleted_log_files {
+                            println!("    - {}", log_file.dimmed());
+                        }
+                    }
+                    println!();
+                }
+            } else {
+                print_response(resp);
+            }
+        }
+
+        Commands::Events {
+            target,
+            limit,
+            json,
+        } => {
+            let selector = target.as_deref().map(TargetSelector::parse);
+            let resp = IpcClient::send_request(Request::GetEvents {
+                target: selector,
+                limit,
+            })
+            .await?;
+            if let Response::EventList { events } = resp {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&events)?);
+                    return Ok(());
+                }
+                if events.is_empty() {
+                    println!("\nNo recorded lifecycle events found for the specified target.\n");
+                    return Ok(());
+                }
+                let mut table = Table::new();
+                table
+                    .load_preset(UTF8_ROUND_CORNERS)
+                    .set_content_arrangement(ContentArrangement::Dynamic)
+                    .set_header(vec![
+                        Cell::new("timestamp").fg(TableColor::Cyan),
+                        Cell::new("app").fg(TableColor::Cyan),
+                        Cell::new("worker").fg(TableColor::Cyan),
+                        Cell::new("event").fg(TableColor::Cyan),
+                        Cell::new("details").fg(TableColor::Cyan),
+                    ]);
+                for e in events {
+                    let event_cell = match e.event_type {
+                        gravhive::events::EventType::Spawned => {
+                            Cell::new(e.event_type).fg(TableColor::Green)
+                        }
+                        gravhive::events::EventType::Crashed => {
+                            Cell::new(e.event_type).fg(TableColor::Red)
+                        }
+                        gravhive::events::EventType::Restarted
+                        | gravhive::events::EventType::Reloaded => {
+                            Cell::new(e.event_type).fg(TableColor::Cyan)
+                        }
+                        gravhive::events::EventType::Exited => {
+                            Cell::new(e.event_type).fg(TableColor::DarkGrey)
+                        }
+                        gravhive::events::EventType::Scaled => {
+                            Cell::new(e.event_type).fg(TableColor::Blue)
+                        }
+                        _ => Cell::new(e.event_type).fg(TableColor::Yellow),
+                    };
+                    table.add_row(vec![
+                        Cell::new(e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()),
+                        Cell::new(e.app_name),
+                        Cell::new(
+                            e.worker_id
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                        ),
+                        event_cell,
+                        Cell::new(e.details),
+                    ]);
+                }
+                println!("\n{}\n", table);
+            } else {
+                print_response(resp);
+            }
+        }
+
         Commands::Kill => {
             let resp = IpcClient::send_request(Request::Shutdown).await?;
             print_response(resp);
@@ -1205,6 +1501,281 @@ async fn main() -> Result<()> {
 
         _ => {}
     }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_process_configs(
+    target: &str,
+    name: Option<String>,
+    instances: Option<String>,
+    watch: bool,
+    max_memory_restart: Option<String>,
+    cwd: Option<PathBuf>,
+    interpreter: Option<String>,
+    envs: Vec<(String, String)>,
+    env_file: Option<PathBuf>,
+    no_autorestart: bool,
+    args: Vec<String>,
+    cron: Option<String>,
+) -> Result<Vec<ProcessConfig>> {
+    let target_path = Path::new(target);
+
+    // Check if target is a configuration file
+    let is_config_file = target.ends_with(".toml")
+        || target.ends_with(".yaml")
+        || target.ends_with(".yml")
+        || target.ends_with(".json");
+
+    if is_config_file && target_path.exists() {
+        println!(
+            "{} Loading ecosystem configuration from {}",
+            "ℹ".cyan(),
+            target.bold()
+        );
+        let mut configs = parse_config_file(target_path)?;
+
+        let file_envs = if let Some(ref path) = env_file {
+            let loaded = gravhive::env_loader::load_env_file(path)?;
+            println!(
+                "{} Loaded {} environment variables from {}",
+                "✓".green(),
+                loaded.len(),
+                path.display().to_string().bold()
+            );
+            Some(loaded)
+        } else {
+            None
+        };
+
+        for cfg in configs.iter_mut() {
+            if let Some(ref f_envs) = file_envs {
+                for (k, v) in f_envs {
+                    cfg.env.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
+            for (k, v) in &envs {
+                cfg.env.insert(k.clone(), v.clone());
+            }
+            if no_autorestart {
+                cfg.autorestart = false;
+            }
+        }
+        return Ok(configs);
+    }
+
+    // Single application direct execution
+    let detected = detect_runtime(target, &args);
+
+    let app_name = name.unwrap_or_else(|| {
+        if let Some(stem) = target_path.file_stem().and_then(|s| s.to_str()) {
+            stem.to_string()
+        } else {
+            "app".to_string()
+        }
+    });
+
+    let (exec_mode, instance_count) = match instances.as_deref() {
+        Some("max") => {
+            let cores = std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(2);
+            (ExecMode::Cluster, cores)
+        }
+        Some(num_str) => {
+            let count = num_str.parse::<usize>().unwrap_or(1);
+            if count > 1 {
+                (ExecMode::Cluster, count)
+            } else {
+                (ExecMode::Fork, 1)
+            }
+        }
+        None => (ExecMode::Fork, 1),
+    };
+
+    let mem_limit = max_memory_restart.as_deref().and_then(parse_memory_string);
+
+    let mut env_map = HashMap::new();
+    if let Some(ref path) = env_file {
+        let loaded = gravhive::env_loader::load_env_file(path)?;
+        println!(
+            "{} Loaded {} environment variables from {}",
+            "✓".green(),
+            loaded.len(),
+            path.display().to_string().bold()
+        );
+        for (k, v) in loaded {
+            env_map.insert(k, v);
+        }
+    }
+    for (k, v) in envs {
+        env_map.insert(k, v);
+    }
+
+    let final_cwd = cwd.or_else(|| std::env::current_dir().ok());
+    let final_interpreter = interpreter.or(detected.interpreter);
+
+    let script_path = Path::new(&detected.script);
+    let final_script = if script_path.exists() {
+        if let Ok(abs) = script_path.canonicalize() {
+            abs.to_string_lossy().to_string()
+        } else {
+            detected.script
+        }
+    } else {
+        detected.script
+    };
+
+    let config = ProcessConfig {
+        name: app_name,
+        script: final_script,
+        args: detected.args,
+        cwd: final_cwd,
+        exec_mode,
+        instances: instance_count,
+        autorestart: !no_autorestart,
+        max_restarts: 15,
+        restart_delay_ms: 100,
+        max_memory_restart: mem_limit,
+        watch,
+        watch_paths: Vec::new(),
+        watch_ignore: Vec::new(),
+        env: env_map,
+        interpreter: final_interpreter,
+        out_log: None,
+        err_log: None,
+        cron,
+        user: None,
+        group: None,
+        cgroup_memory_max: None,
+        cgroup_cpu_max: None,
+        cgroup_pids_max: None,
+        listen_port: None,
+        target_port: None,
+        idle_timeout_secs: None,
+        log_rotate_max_size: None,
+        log_rotate_keep: None,
+        log_compress: true,
+        health_check: None,
+    };
+
+    Ok(vec![config])
+}
+
+async fn run_foreground(configs: Vec<ProcessConfig>) -> Result<()> {
+    println!(
+        "{} GravHive container runtime starting in foreground (PID: {})...",
+        "●".cyan().bold(),
+        std::process::id()
+    );
+
+    let log_hub = LogHub::new(1000);
+    let mut rx = log_hub.subscribe();
+
+    // Stream logs with clean colored tags to stdout / stderr
+    tokio::spawn(async move {
+        while let Ok(entry) = rx.recv().await {
+            let tag = format!("[{}:{}]", entry.app_name, entry.worker_id);
+            if entry.stream == "err" {
+                eprintln!("{} {}", tag.magenta(), entry.message);
+            } else {
+                println!("{} {}", tag.cyan(), entry.message);
+            }
+        }
+    });
+
+    let manager = Arc::new(RwLock::new(ProcessManager::new(log_hub)));
+
+    for cfg in configs {
+        let app_name = cfg.name.clone();
+        let instances = cfg.instances;
+        let mut mgr = manager.write().await;
+        match mgr.start_app(cfg).await {
+            Ok(ids) => {
+                println!(
+                    "{} App '{}' ({} instance{}) running in foreground with IDs: {:?}",
+                    "✓".green().bold(),
+                    app_name.bold(),
+                    instances,
+                    if instances > 1 { "s" } else { "" },
+                    ids
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} Failed to start app '{}': {}",
+                    "✗".red().bold(),
+                    app_name,
+                    e
+                );
+            }
+        }
+    }
+
+    // Health checker, autorestart, and zombie process reaper
+    let mgr_health = manager.clone();
+    let health_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(1000));
+        loop {
+            interval.tick().await;
+            let mut mgr = mgr_health.write().await;
+            mgr.check_health_and_restart().await;
+        }
+    });
+
+    // Handle OS shutdown signals (SIGINT, SIGTERM) and process exit monitoring
+    #[cfg(unix)]
+    {
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .context("Failed to install SIGINT listener")?;
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .context("Failed to install SIGTERM listener")?;
+        let mut check_interval = tokio::time::interval(Duration::from_millis(500));
+
+        loop {
+            tokio::select! {
+                _ = sigint.recv() => {
+                    println!("\n{} Received SIGINT (Ctrl+C), stopping all managed processes...", "ℹ".yellow().bold());
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    println!("\n{} Received SIGTERM, stopping all managed processes...", "ℹ".yellow().bold());
+                    break;
+                }
+                _ = check_interval.tick() => {
+                    let mgr = manager.read().await;
+                    let procs = mgr.list();
+                    let any_alive = procs.iter().any(|p| {
+                        p.status == ProcessStatus::Online || p.status == ProcessStatus::Restarting
+                    });
+                    if !procs.is_empty() && !any_alive {
+                        println!("\n{} All child processes have exited.", "ℹ".cyan().bold());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        println!(
+            "\n{} Received Ctrl+C, stopping all managed processes...",
+            "ℹ".yellow().bold()
+        );
+    }
+
+    health_task.abort();
+    let mut mgr = manager.write().await;
+    let stopped = mgr
+        .stop(&TargetSelector::All, Duration::from_millis(3000))
+        .await?;
+    println!(
+        "{} Gracefully stopped {} worker(s). GravHive container runtime exited cleanly.",
+        "✓".green().bold(),
+        stopped
+    );
 
     Ok(())
 }
@@ -1368,10 +1939,16 @@ async fn handle_webhook_command(action: WebhookAction) -> Result<()> {
                 {
                     daemon_cfg
                 } else {
-                    AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                    AlertConfig::load_global()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
                 }
             } else {
-                AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                AlertConfig::load_global()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
             };
 
             match provider_type {
@@ -1389,7 +1966,9 @@ async fn handle_webhook_command(action: WebhookAction) -> Result<()> {
                 }
                 WebhookType::Telegram => {
                     let cid = chat_id.ok_or_else(|| {
-                        anyhow::anyhow!("--chat-id is required when configuring a Telegram webhook/bot")
+                        anyhow::anyhow!(
+                            "--chat-id is required when configuring a Telegram webhook/bot"
+                        )
                     })?;
                     cfg.telegram = Some(TelegramConfig {
                         bot_token: url.clone(),
@@ -1413,7 +1992,10 @@ async fn handle_webhook_command(action: WebhookAction) -> Result<()> {
                 "{} Webhook for {} saved to {}",
                 "✓".green().bold(),
                 format!("{:?}", provider_type).cyan().bold(),
-                gravhive::common::alerts_config_path().display().to_string().bold()
+                gravhive::common::alerts_config_path()
+                    .display()
+                    .to_string()
+                    .bold()
             );
 
             if save_to_config && Path::new("ghive.toml").exists() {
@@ -1450,10 +2032,16 @@ async fn handle_webhook_command(action: WebhookAction) -> Result<()> {
                 {
                     daemon_cfg
                 } else {
-                    AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                    AlertConfig::load_global()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
                 }
             } else {
-                AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                AlertConfig::load_global()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
             };
 
             if cfg.is_empty() {
@@ -1565,7 +2153,10 @@ async fn handle_webhook_command(action: WebhookAction) -> Result<()> {
                     _ => Vec::new(),
                 }
             } else {
-                let cfg = AlertConfig::load_global().ok().flatten().unwrap_or_default();
+                let cfg = AlertConfig::load_global()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 if cfg.is_empty() {
                     eprintln!(
                         "{} No webhooks configured. Run `ghive webhook set <URL>` first.",
@@ -1599,10 +2190,16 @@ async fn handle_webhook_command(action: WebhookAction) -> Result<()> {
                 {
                     daemon_cfg
                 } else {
-                    AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                    AlertConfig::load_global()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
                 }
             } else {
-                AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                AlertConfig::load_global()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
             };
 
             match provider.to_lowercase().as_str() {

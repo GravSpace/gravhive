@@ -1,6 +1,6 @@
 [package]
 name = "gravhive"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Gravhive Team"]
 description = "Next-Generation High-Performance Production Process Manager in Rust"
@@ -30,7 +30,7 @@ sysinfo = "0.33"
 comfy-table = "7.1"
 ratatui = "0.29"
 crossterm = "0.28"
-nix = { version = "0.29", features = ["signal", "process", "user"] }
+nix = { version = "0.29", features = ["signal", "process", "user", "resource"] }
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
 thiserror = "2.0"
@@ -47,6 +47,7 @@ cron = "0.17.0"
 wasmi = "2.0.0"
 aes-gcm = "0.11.1"
 inferno = { version = "0.12.8", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 
 [profile.release]
 opt-level = 3

@@ -37,6 +37,10 @@
 - **In-Memory Secret Vault & AES-256-GCM Encryption (`ghive secrets`):** Enkripsi kuat untuk file konfigurasi `.env` (`.env.enc`) dan vault terenkripsi dengan penyamaran otomatis (_credential redaction_) di log dan `describe`.
 - **On-Demand CPU & Memory Profiling (`ghive profile`):** Generator _interactive SVG Flamegraph_ bawaan tanpa dependensi luar untuk mendiagnosis bottleneck CPU dan memory leak pada aplikasi produksi secara real-time.
 - **Built-in Self-Upgrade (`ghive upgrade`):** Memperbarui biner `ghive` dan `ghived` secara atomik langsung dari rilis resmi GitHub hanya dengan satu perintah tanpa perlu kompilasi ulang manual.
+- **Pre-Flight Ecosystem Validator (`ghive validate` / `ghive check`):** Linter konfigurasi cerdas untuk memverifikasi sintaks, keberadaan file skrip dan biner, executable interpreter di `$PATH`, interval cron, batas memori, konflik port TCP, dan format readiness probe sebelum proses dijalankan.
+- **System & Environment Diagnostics (`ghive doctor`):** Diagnostik kesehatan server komprehensif untuk memeriksa IPC daemon, socket, vault secret key, webhook alert, CPU/RAM, ulimit file descriptor, cgroups v2, runtime eksternal (Node, Bun, Deno, Python, Rust, Docker, PHP), disk log, dan port Prometheus.
+- **Lifecycle & Storage Garbage Collection (`ghive prune`):** Membersihkan worker yang berstatus `stopped` atau `errored` dari memori serta menghapus berkas log usang atau orphan dengan simulasi aman (`--dry-run`).
+- **Audit Journal & Event Timeline (`ghive events` / `ghive history`):** Linimasa peristiwa siklus hidup worker (spawn, exit, crash, restart, reload, scale, dan rotasi log) dengan timestamp presisi dan dukungan format JSON untuk pipeline audit CI/CD.
 
 ---
 
@@ -182,6 +186,11 @@ ghive reload bun-web
 # Kustomisasi reload: jeda stabilisasi (ms) dan batas graceful shutdown (ms)
 ghive reload bun-web --delay 50 --timeout 3000
 
+# Dynamic Process Scaling (tambah/kurang worker runtime tanpa stop aplikasi)
+ghive scale api-gateway 4    # Set tepat 4 worker
+ghive scale api-gateway +2   # Tambah 2 worker secara instan
+ghive scale api-gateway -1   # Kurangi 1 worker secara graceful
+
 # Menghapus proses dari pengawasan
 ghive delete api-gateway
 ghive delete all
@@ -195,7 +204,7 @@ ghive monit
 
 _Gunakan tombol `[↑/↓]` untuk navigasi proses, `[R]` restart, `[S]` stop, `[D]` delete, dan `[Q]` untuk keluar._
 
-### 5. Melihat Log Aplikasi (`ghive logs`)
+### 5. Manajemen Log & Rotasi Otomatis (`ghive logs` & `ghive logrotate`)
 
 ```bash
 # Menampilkan 50 baris log terakhir
@@ -206,6 +215,10 @@ ghive logs api-gateway -f
 
 # Hanya menampilkan log error
 ghive logs api-gateway --err
+
+# Putar log dan kompresi gzip (.gz) secara manual on-demand
+ghive logrotate api-gateway
+ghive logrotate all
 ```
 
 ### 6. Menyimpan & Memulihkan State (`save` & `resurrect`)
@@ -441,6 +454,232 @@ ghive webhook delete all
 
 > **Tips:** Anda juga dapat menggunakan alias `ghive alert` atau `ghive alerts`.
 
+### 16. Dynamic Worker Scaling (`ghive scale`) 📈
+
+Tingkatkan atau turunkan jumlah worker process cluster secara on-the-fly tanpa downtime:
+
+```bash
+# Set jumlah worker aplikasi web secara absolut menjadi 4 instance
+ghive scale web 4
+
+# Tambah 2 worker baru (+2)
+ghive scale web +2
+
+# Kurangi 1 worker (-1)
+ghive scale web -1
+```
+
+### 17. Docker & Container Runtime Mode (`ghive run`) 🐳
+
+Gravhive dirancang untuk berfungsi sebagai **PID 1 Container Supervisor** yang sempurna di dalam Docker dan Kubernetes:
+- Berjalan di *foreground* tanpa melepaskan proses ke background daemon.
+- Meneruskan dan menangani sinyal OS `SIGTERM` dan `SIGINT` untuk graceful shutdown proses anak.
+- Mengumpulkan dan melakukan *multiplexing* log stdout/stderr dari seluruh worker anak langsung ke stdout container (`docker logs`).
+- Membersihkan proses anak yang mati (*zombie reaper*).
+
+#### Menjalankan di Docker / Foreground:
+```bash
+# Menjalankan aplikasi langsung di foreground dengan 4 instance worker
+ghive run app.js -i 4
+
+# Menjalankan dengan file environment (.env)
+ghive run app.js --env-file .env
+
+# Menjalankan konfigurasi ekosistem ghive.toml di foreground
+ghive run ghive.toml
+
+# Atau menggunakan opsi --no-daemon pada perintah start
+ghive start ghive.toml --no-daemon
+```
+
+#### Contoh `Dockerfile` Produksi:
+```dockerfile
+FROM rust:alpine AS builder
+# ... build gravhive atau install binary pre-built ...
+
+FROM node:20-alpine
+COPY --from=builder /usr/local/bin/ghive /usr/local/bin/ghive
+WORKDIR /app
+COPY . .
+RUN npm install --production
+
+# Menggunakan Gravhive sebagai PID 1 supervisor container
+ENTRYPOINT ["ghive", "run", "server.js", "-i", "max"]
+```
+
+### 18. Environment File Loader (`--env-file`) 🔐
+
+Muat variabel environment dari file `.env` standar atau file `.env.enc` yang terenkripsi AES-256-GCM secara otomatis:
+
+```bash
+# Memuat variabel dari .env standar
+ghive start app.js --env-file .env
+
+# Memuat variabel dari .env.enc (otomatis didekripsi menggunakan master key vault)
+ghive start app.js --env-file .env.enc
+
+# Override nilai variabel spesifik dengan flag -e / --env
+ghive start app.js --env-file .env -e PORT=8080 -e NODE_ENV=staging
+
+# Didukung juga pada mode Docker (ghive run)
+ghive run app.js --env-file .env
+```
+
+### 19. Native Prometheus Metrics Exporter (`ghive metrics`) 📊
+
+Gravhive menyediakan HTTP Prometheus / OpenMetrics exporter bawaan berkecepatan tinggi tanpa dependensi tambahan. Endpoint ini juga menyertakan metrik yang 100% kompatibel dengan dashboard PM2 Grafana standar (`pm2_up`, `pm2_process_cpu`, `pm2_process_memory`, `pm2_process_status`, `pm2_process_restarts`).
+
+```bash
+# Menjalankan Prometheus exporter pada port default 9615 (http://0.0.0.0:9615/metrics)
+ghive metrics
+
+# Menjalankan pada custom port
+ghive metrics --port 9090
+```
+
+#### Contoh Konfigurasi Scrape `prometheus.yml`:
+```yaml
+scrape_configs:
+  - job_name: 'gravhive'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['localhost:9615']
+```
+
+Contoh keluaran metrik (`GET /metrics`):
+```text
+# HELP gravhive_up GravHive daemon status (1 = reachable, 0 = unreachable)
+# TYPE gravhive_up gauge
+gravhive_up 1
+# HELP pm2_up Process manager daemon status (PM2 compatibility)
+# TYPE pm2_up gauge
+pm2_up 1
+# HELP gravhive_processes_total Total number of registered processes
+# TYPE gravhive_processes_total gauge
+gravhive_processes_total 4
+# HELP gravhive_process_status Process online status (1 = online, 0 = other)
+gravhive_process_status{id="0",name="web",instance="0",status="online"} 1
+pm2_process_status{name="web",id="0"} 1
+# HELP gravhive_process_cpu_percent Process CPU utilization percentage
+gravhive_process_cpu_percent{id="0",name="web",instance="0",pid="4123"} 0.85
+pm2_process_cpu{name="web",id="0"} 0.85
+# HELP gravhive_process_memory_bytes Process RSS memory usage in bytes
+gravhive_process_memory_bytes{id="0",name="web",instance="0",pid="4123"} 41943040
+pm2_process_memory{name="web",id="0"} 41943040
+```
+
+### 20. Pre-Flight Ecosystem Validator (`ghive validate` / `ghive check`) 🔍
+
+Cegah kegagalan deploy di lingkungan produksi dengan linter konfigurasi sebelum menjalankan `ghive start`. Perintah ini memvalidasi:
+- Sintaks TOML dan JSON pada file ekosistem.
+- Keberadaan file target skrip atau biner yang dikonfigurasi.
+- Ketersediaan interpreter kustom di `$PATH` sistem.
+- Sintaks ekspresi cron standar 5-field atau 6-field.
+- Format batas memori (`max_memory_restart`).
+- Deteksi tabrakan (*collision*) port TCP antara aplikasi.
+- Format dan skema URL health check readiness probe.
+
+```bash
+# Validasi file ekosistem ghive.toml (atau alias ghive check)
+ghive validate ghive.toml
+ghive check ghive.toml
+
+# Validasi file ekosistem format JSON (PM2 migration)
+ghive validate ecosystem.config.json
+```
+
+Contoh output validasi:
+```text
+Validating configuration file: "ghive.toml"
+  [OK] Valid syntax and ecosystem structure
+  [OK] App 'api-gateway': script 'dist/index.js' found (interpreter: 'node')
+  [OK] App 'worker': cron expression '0 2 * * *' is valid
+  [OK] No port collisions detected across apps
+  [OK] Health check URL 'http://127.0.0.1:3000/healthz' is valid
+
+Validation successful: 0 errors, 0 warnings. Configuration is ready for production.
+```
+
+### 21. System & Runtime Environment Diagnostics (`ghive doctor`) 🩺
+
+Jalankan audit diagnostik menyeluruh untuk memeriksa kesehatan host, socket IPC, dependensi runtime eksternal, dan alokasi resource sebelum atau sesudah menjalankan proses produksi:
+
+```bash
+ghive doctor
+```
+
+Output komprehensif mencakup:
+- **Daemon & IPC:** Ketersediaan socket UNIX / IPC, status komunikasi `ghived`, dan versi daemon.
+- **Security & Secret Vault:** Keberadaan dan integritas master encryption key AES-256 (`~/.gravhive/vault.key`).
+- **Alerting & Webhooks:** Status dan jumlah webhook terkonfigurasi (Discord, Slack, Telegram, Custom HTTP).
+- **Host Hardware Resources:** Jumlah core CPU, total kapasitas RAM, dan pemakaian memori sistem.
+- **OS Limits & Kernel Isolation:** Batas limit file descriptor (`ulimit -n`) via `getrlimit`, dan status ketersediaan Linux **cgroups v2** untuk sandbox memori/CPU.
+- **Installed Runtimes:** Deteksi otomatis versi `node`, `bun`, `deno`, `python3`, `cargo`, `docker`, dan `php`.
+- **Log Storage Capacity:** Direktori log `~/.gravhive/logs/` dan kapasitas penyimpanan disk yang tersisa.
+- **Prometheus Metrics Port:** Ketersediaan port TCP default (9615).
+
+### 22. Lifecycle & Log Storage Garbage Collection (`ghive prune`) 🧹
+
+Kelola efisiensi resource memori daemon dan ruang penyimpanan disk dengan membersihkan worker yang sudah tidak aktif serta file log orphan / usang:
+
+```bash
+# 1. Prune simulasi (Dry Run): Tampilkan apa yang akan dihapus tanpa modifikasi
+ghive prune --dry-run
+
+# 2. Prune seluruh worker non-aktif (stopped / errored) dan hapus file log usang
+ghive prune
+
+# 3. Prune tanpa konfirmasi interaktif (cocok untuk cron job / CI/CD pipeline)
+ghive prune --force
+# atau
+ghive prune -f
+
+# 4. Hanya bersihkan file log usang/orphan tanpa menghapus proses dari daftar
+ghive prune --only-logs
+```
+
+Contoh keluaran `ghive prune`:
+```text
+Simulating prune operation (dry-run):
+  - Stopped / Errored processes to remove (2):
+    * worker-job (ID: 3, status: stopped)
+    * broken-script (ID: 7, status: errored)
+  - Log files to delete (2):
+    * /Users/user/.gravhive/logs/broken-script-out.log (12.4 KB)
+    * /Users/user/.gravhive/logs/broken-script-err.log (4.1 KB)
+Dry-run completed: 2 processes would be removed, 2 log files (16.5 KB) would be deleted.
+```
+
+### 23. Event Timeline & Audit Journal (`ghive events` / `ghive history`) 📜
+
+Gravhive mencatat linimasa peristiwa siklus hidup worker secara tersentralisasi di dalam circular buffer ring di memori daemon (default 500 entri terbaru). Setiap event dilengkapi timestamp RFC 3339 presisi, nama aplikasi, worker ID, PID, tipe event, dan pesan detail.
+
+```bash
+# Tampilkan 30 event siklus hidup terbaru untuk semua aplikasi
+ghive events
+
+# Tampilkan event dengan batas jumlah kustom
+ghive events --limit 50
+# atau
+ghive history -n 50
+
+# Filter event untuk aplikasi spesifik (nama atau worker ID)
+ghive events api-gateway
+ghive events 0
+
+# Ekspor audit event dalam format JSON untuk analisis SIEM atau log monitoring
+ghive events --json
+```
+
+**Tipe Event yang Dicatat:**
+- `spawned`: Worker baru berhasil di-spawn dengan PID OS tertentu.
+- `exited`: Worker berhenti secara graceful dengan kode status normal (`code: 0`).
+- `crashed`: Worker mengalami abnormal termination (`exit code != 0` atau signal terminasi).
+- `restarted`: Pemulihan otomatis via crash watchdog atau pemanggilan restart manual.
+- `reloaded`: Zero-downtime rolling reload instance worker baru menggantikan worker lama.
+- `scaled`: Penyesuaian jumlah worker cluster (`ghive scale`).
+- `logs_rotated`: Rotasi otomatis atau manual file log stdout/stderr.
+
 ---
 
 ## ⚙️ Format File Konfigurasi Lengkap (`ghive.toml`)
@@ -463,6 +702,21 @@ autorestart = true
 max_memory_restart = "300MB"
 watch = false
 env = { NODE_ENV = "production", PORT = "8080" }
+
+# Rotasi Log Otomatis & Kompresi
+[app.web-service.log]
+out = "logs/web-out.log"
+err = "logs/web-err.log"
+rotate_max_size = "50MB"               # Rotasi otomatis bila log mencapai 50 MB
+rotate_keep = 5                        # Simpan 5 file arsip terkompresi
+compress = true                        # Kompresi gzip (.gz) otomatis di background
+
+# Health Check & Readiness Probe (Zero-Downtime Reload Verification)
+[app.web-service.health_check]
+http_path = "http://127.0.0.1:{port}/healthz"
+timeout_secs = 3
+max_retries = 3
+interval_secs = 5
 
 # Linux cgroups v2 resource hard-limits
 # cgroup_memory_max = "500MB"

@@ -7,6 +7,7 @@ use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -165,10 +166,15 @@ impl Worker {
             crate::common::logs_dir().join(format!("{}-{}-err.log", app_name, worker_id))
         });
 
+        let max_rotate_size = self.config.log_rotate_max_size;
+        let rotate_keep = self.config.log_rotate_keep.unwrap_or(5);
+        let compress = self.config.log_compress;
+
         // Spawn stdout reader
         if let Some(pipe) = stdout {
             let log_hub_c = log_hub.clone();
             let app_name_c = app_name.clone();
+            let out_file_c = out_log_file.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(pipe).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
@@ -181,11 +187,21 @@ impl Worker {
                     };
                     log_hub_c.push(entry);
 
+                    // Automatic log rotation check
+                    if let Some(max_bytes) = max_rotate_size {
+                        let _ = crate::log_rotate::check_and_rotate_file(
+                            &out_file_c,
+                            max_bytes,
+                            rotate_keep,
+                            compress,
+                        );
+                    }
+
                     // Write to file
                     if let Ok(mut f) = OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open(&out_log_file)
+                        .open(&out_file_c)
                     {
                         let _ = writeln!(f, "[{}] {}", Utc::now().to_rfc3339(), line);
                     }
@@ -197,6 +213,7 @@ impl Worker {
         if let Some(pipe) = stderr {
             let log_hub_c = log_hub;
             let app_name_c = app_name;
+            let err_file_c = err_log_file.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(pipe).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
@@ -209,11 +226,21 @@ impl Worker {
                     };
                     log_hub_c.push(entry);
 
+                    // Automatic log rotation check
+                    if let Some(max_bytes) = max_rotate_size {
+                        let _ = crate::log_rotate::check_and_rotate_file(
+                            &err_file_c,
+                            max_bytes,
+                            rotate_keep,
+                            compress,
+                        );
+                    }
+
                     // Write to file
                     if let Ok(mut f) = OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open(&err_log_file)
+                        .open(&err_file_c)
                     {
                         let _ = writeln!(f, "[{}] {}", Utc::now().to_rfc3339(), line);
                     }
@@ -275,6 +302,25 @@ impl Worker {
 
     pub fn is_stopping(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
+    }
+
+    pub fn get_log_paths(&self) -> (PathBuf, PathBuf) {
+        let out_log_file = self.config.out_log.clone().unwrap_or_else(|| {
+            crate::common::logs_dir().join(format!("{}-{}-out.log", self.app_name, self.id))
+        });
+        let err_log_file = self.config.err_log.clone().unwrap_or_else(|| {
+            crate::common::logs_dir().join(format!("{}-{}-err.log", self.app_name, self.id))
+        });
+        (out_log_file, err_log_file)
+    }
+
+    pub fn rotate_logs_now(&self) -> (bool, bool) {
+        let (out_file, err_file) = self.get_log_paths();
+        let keep = self.config.log_rotate_keep.unwrap_or(5);
+        let compress = self.config.log_compress;
+        let r1 = crate::log_rotate::rotate_file_now(&out_file, keep, compress).unwrap_or(false);
+        let r2 = crate::log_rotate::rotate_file_now(&err_file, keep, compress).unwrap_or(false);
+        (r1, r2)
     }
 
     pub async fn try_wait(&self) -> Result<Option<std::process::ExitStatus>> {

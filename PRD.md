@@ -304,7 +304,8 @@ max_restarts = 10
 
 | Perintah | Argumen / Opsi | Deskripsi |
 | :--- | :--- | :--- |
-| **`ghive start <target>`** | `-i, --instances <n\|max>`, `--name <name>`, `--watch`, `--max-memory-restart <size>`, `--env <K=V>`, `--cwd <path>` | Menjalankan aplikasi langsung dari file script (`.js`, `.ts`, `.py`, `.php`), compiled binary, atau file konfigurasi (`ghive.toml` / `ecosystem.config.json`). Otomatis menyalakan daemon jika belum aktif. |
+| **`ghive start <target>`** | `-i, --instances <n\|max>`, `--name <name>`, `--watch`, `--max-memory-restart <size>`, `--env <K=V>`, `--env-file <path>`, `--no-daemon`, `--no-autorestart`, `--cwd <path>` | Menjalankan aplikasi langsung dari file script (`.js`, `.ts`, `.py`, `.php`), compiled binary, atau file konfigurasi (`ghive.toml` / `ecosystem.config.json`). Otomatis menyalakan daemon jika belum aktif. |
+| **`ghive run <target>`** | `-i, --instances <n\|max>`, `--name <name>`, `--watch`, `--max-memory-restart <size>`, `--env <K=V>`, `--env-file <path>`, `--no-autorestart`, `--cwd <path>` | Menjalankan aplikasi langsung dalam mode foreground (PID 1 container supervisor) tanpa menghubungkan ke background daemon. Ideal untuk Docker / Kubernetes. |
 | **`ghive stop <id\|name\|all>`** | `--force`, `--timeout <ms>` | Menghentikan proses secara graceful via `SIGTERM` (atau paksa dengan `SIGKILL` bila `--force`). |
 | **`ghive restart <id\|name\|all>`** | `--watch` | Mematikan lalu menyalakan kembali proses/cluster secara cepat. |
 | **`ghive reload <id\|name\|all>`** | `--graceful-timeout <ms>` | Melakukan zero-downtime rolling reload (pekerja baru siap sebelum pekerja lama dimatikan). |
@@ -319,8 +320,14 @@ max_restarts = 10
 | **`ghive resurrect`** | - | Memulihkan kembali semua proses dari snapshot file yang disimpan sebelumnya. |
 | **`ghive startup`** | `[systemd\|launchd\|openrc]` | Membuat dan mengonfigurasi startup script otomatis di OS agar menyala saat reboot server. |
 | **`ghive unstartup`** | - | Menghapus integrasi startup service dari OS. |
-| **`ghive prune`** | - | Membersihkan entri proses yang berstatus `stopped` atau `errored` serta log file usang. |
+| **`ghive prune`** | `--dry-run`, `-f, --force`, `--only-logs` | Garbage collection untuk proses yang `stopped` atau `errored` serta membersihkan file log orphan/usang. |
+| **`ghive doctor`** | - | Diagnosa komprehensif kesehatan lingkungan sistem: koneksi daemon IPC, socket, vault secret key, webhook, CPU, RAM, limit ulimit file descriptor, Linux cgroups v2, ketersediaan runtime eksternal (Node, Bun, Deno, Python, Rust, Docker, PHP), kapasitas disk log, dan port Prometheus. |
+| **`ghive validate` / `ghive check`** | `<file>` | Pre-flight configuration linter untuk memeriksa file ekosistem (`ghive.toml` / `ecosystem.config.json`): validasi sintaks, keberadaan script/biner target, executable interpreter di `$PATH`, sintaks cron expression, memory limits, deteksi tabrakan port, dan URL readiness probe. |
+| **`ghive events` / `ghive history`** | `[target]`, `-n, --limit <n>`, `--json` | Menampilkan linimasa audit log dan riwayat peristiwa siklus hidup worker (spawn, exit, crash, restart, reload, scale, dan rotasi log) dengan timestamp RFC 3339. |
+| **`ghive scale <app> <n\|+n\|-n>`** | - | Menambah atau mengurangi jumlah worker instance aplikasi secara dinamis saat runtime tanpa menghentikan aplikasi. |
+| **`ghive logrotate [id\|name\|all]`** | - | Memutar (*rotate*) berkas log stdout/stderr dan mengompresi arsip lama menjadi `.gz` secara manual on-demand. |
 | **`ghive webhook`** / **`ghive alert`** | `set <url> [--type <t>] [--username <u>] [--channel <c>] [--chat-id <id>] [-H <k:v>]`, `list [--show-full]`, `test [-m <msg>]`, `delete <provider\|all>` | Mengelola endpoint webhook pemberitahuan (Discord, Slack, Telegram, Custom HTTP) secara persisten di `~/.gravhive/alerts.json` dan sinkron live via IPC ke daemon `ghived`. |
+| **`ghive metrics`** | `-p, --port <port>` (default: 9615) | Menjalankan HTTP server Prometheus / OpenMetrics exporter bawaan untuk scraping metrik performa oleh Grafana/Prometheus (termasuk kompatibilitas metrik `pm2_*`). |
 
 ---
 

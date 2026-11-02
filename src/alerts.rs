@@ -260,7 +260,11 @@ impl AlertManager {
             {
                 Ok(resp) if resp.status().is_success() => {
                     debug!("Discord alert sent successfully");
-                    reports.push(("Discord".to_string(), true, "Alert delivered successfully".to_string()));
+                    reports.push((
+                        "Discord".to_string(),
+                        true,
+                        "Alert delivered successfully".to_string(),
+                    ));
                 }
                 Ok(resp) => {
                     let err_msg = format!("HTTP {}", resp.status());
@@ -292,7 +296,11 @@ impl AlertManager {
             {
                 Ok(resp) if resp.status().is_success() => {
                     debug!("Slack alert sent successfully");
-                    reports.push(("Slack".to_string(), true, "Alert delivered successfully".to_string()));
+                    reports.push((
+                        "Slack".to_string(),
+                        true,
+                        "Alert delivered successfully".to_string(),
+                    ));
                 }
                 Ok(resp) => {
                     let err_msg = format!("HTTP {}", resp.status());
@@ -318,7 +326,11 @@ impl AlertManager {
             match self.client.post(&url).json(&payload).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     debug!("Telegram alert sent successfully");
-                    reports.push(("Telegram".to_string(), true, "Alert delivered successfully".to_string()));
+                    reports.push((
+                        "Telegram".to_string(),
+                        true,
+                        "Alert delivered successfully".to_string(),
+                    ));
                 }
                 Ok(resp) => {
                     let err_msg = format!("HTTP {}", resp.status());
@@ -341,7 +353,11 @@ impl AlertManager {
             match req.json(&event).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     debug!("Custom webhook alert sent successfully");
-                    reports.push(("Generic Webhook".to_string(), true, format!("Alert delivered successfully ({})", resp.status())));
+                    reports.push((
+                        "Generic Webhook".to_string(),
+                        true,
+                        format!("Alert delivered successfully ({})", resp.status()),
+                    ));
                 }
                 Ok(resp) => {
                     let err_msg = format!("HTTP {}", resp.status());

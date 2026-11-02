@@ -124,6 +124,36 @@ pub struct ProcessConfig {
     pub target_port: Option<u16>,
     #[serde(default)]
     pub idle_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub log_rotate_max_size: Option<u64>,
+    #[serde(default)]
+    pub log_rotate_keep: Option<u32>,
+    #[serde(default = "default_true")]
+    pub log_compress: bool,
+    #[serde(default)]
+    pub health_check: Option<HealthCheckConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HealthCheckConfig {
+    pub http_path: Option<String>,
+    pub tcp_port: Option<u16>,
+    #[serde(default = "default_hc_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_hc_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_hc_retries")]
+    pub max_retries: u32,
+}
+
+fn default_hc_interval() -> u64 {
+    10
+}
+fn default_hc_timeout() -> u64 {
+    3
+}
+fn default_hc_retries() -> u32 {
+    3
 }
 
 fn default_exec_mode() -> ExecMode {

@@ -2,6 +2,7 @@
 
 use crate::alerts::AlertConfig;
 use crate::cron::CronJobInfo;
+use crate::events::LifecycleEvent;
 use crate::model::{LogEntry, LogStreamType, ProcessConfig, ProcessItem, TargetSelector};
 use crate::wasm::PluginInfo;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,19 @@ pub enum Request {
     TestAlert {
         message: String,
     },
+    Scale {
+        app: String,
+        instances: String,
+    },
+    LogRotate(TargetSelector),
+    Prune {
+        dry_run: bool,
+        only_logs: bool,
+    },
+    GetEvents {
+        target: Option<TargetSelector>,
+        limit: usize,
+    },
     Shutdown,
 }
 
@@ -67,6 +81,19 @@ pub enum Response {
     AlertConfig(AlertConfig),
     TestAlertResult {
         results: Vec<(String, bool, String)>,
+    },
+    ScaleResult {
+        app: String,
+        previous: usize,
+        current: usize,
+    },
+    PruneResult {
+        removed_processes: Vec<(u32, String)>,
+        deleted_log_files: Vec<String>,
+        freed_bytes: u64,
+    },
+    EventList {
+        events: Vec<LifecycleEvent>,
     },
     LogLine(LogEntry),
     Error {

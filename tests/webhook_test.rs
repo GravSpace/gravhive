@@ -1,4 +1,6 @@
-use gravhive::alerts::{mask_webhook_url, AlertConfig, DiscordConfig, SlackConfig, TelegramConfig, WebhookConfig};
+use gravhive::alerts::{
+    mask_webhook_url, AlertConfig, DiscordConfig, SlackConfig, TelegramConfig, WebhookConfig,
+};
 use std::collections::HashMap;
 
 #[test]
@@ -11,10 +13,7 @@ fn test_mask_webhook_urls() {
         mask_webhook_url("https://hooks.slack.com/services/T00/B00/X12345678"),
         "https://hooks.slack.com/services/T00/B00/X123...[REDACTED]"
     );
-    assert_eq!(
-        mask_webhook_url("short"),
-        "[REDACTED]"
-    );
+    assert_eq!(mask_webhook_url("short"), "[REDACTED]");
 }
 
 #[test]
@@ -46,4 +45,3 @@ fn test_alert_config_serialization_cycle() {
 
     assert_eq!(config, deserialized);
 }
-

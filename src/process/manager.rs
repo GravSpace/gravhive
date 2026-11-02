@@ -1,4 +1,5 @@
 use crate::alerts::{AlertEvent, AlertManager};
+use crate::events::{EventJournal, EventType};
 use crate::model::{ExecMode, LogEntry, ProcessConfig, ProcessItem, ProcessStatus, TargetSelector};
 use crate::process::worker::Worker;
 use crate::ring_buffer::LogHub;
@@ -15,6 +16,7 @@ pub struct ProcessManager {
     next_id: u32,
     log_hub: LogHub,
     alert_manager: Option<AlertManager>,
+    event_journal: EventJournal,
 }
 
 impl ProcessManager {
@@ -25,11 +27,20 @@ impl ProcessManager {
             next_id: 0,
             log_hub,
             alert_manager: None,
+            event_journal: EventJournal::default(),
         }
     }
 
     pub fn set_alert_manager(&mut self, alert_mgr: AlertManager) {
         self.alert_manager = Some(alert_mgr);
+    }
+
+    pub fn set_event_journal(&mut self, journal: EventJournal) {
+        self.event_journal = journal;
+    }
+
+    pub fn event_journal(&self) -> &EventJournal {
+        &self.event_journal
     }
 
     pub async fn start_app(&mut self, mut config: ProcessConfig) -> Result<Vec<u32>> {
@@ -85,8 +96,20 @@ impl ProcessManager {
                     id, app_name, e
                 );
                 worker.status = ProcessStatus::Errored;
+                self.event_journal.record_event(
+                    &app_name,
+                    Some(id),
+                    EventType::Crashed,
+                    &format!("Spawn failed: {}", e),
+                );
             } else {
                 started_ids.push(id);
+                self.event_journal.record_event(
+                    &app_name,
+                    Some(id),
+                    EventType::Spawned,
+                    &format!("PID {:?}", worker.pid),
+                );
             }
 
             self.workers.push(worker);
@@ -100,6 +123,12 @@ impl ProcessManager {
         for worker in self.workers.iter_mut() {
             if matches_target(worker, target) && worker.status == ProcessStatus::Online {
                 worker.stop(timeout).await?;
+                self.event_journal.record_event(
+                    &worker.app_name,
+                    Some(worker.id),
+                    EventType::Exited,
+                    "Manual stop request",
+                );
                 affected += 1;
             }
         }
@@ -116,8 +145,20 @@ impl ProcessManager {
                 if let Err(e) = worker.spawn().await {
                     error!("Failed to restart worker #{}: {}", worker.id, e);
                     worker.status = ProcessStatus::Errored;
+                    self.event_journal.record_event(
+                        &worker.app_name,
+                        Some(worker.id),
+                        EventType::Crashed,
+                        &format!("Restart failed: {}", e),
+                    );
                 } else {
                     worker.restarts += 1;
+                    self.event_journal.record_event(
+                        &worker.app_name,
+                        Some(worker.id),
+                        EventType::Restarted,
+                        &format!("PID {:?}", worker.pid),
+                    );
                     affected += 1;
                 }
             }
@@ -185,6 +226,25 @@ impl ProcessManager {
                 continue;
             }
 
+            // Active readiness probe if configured
+            if let Some(ref hc) = new_worker.config.health_check {
+                let healthy = crate::health::probe_worker_readiness(&new_worker, hc).await;
+                if !healthy {
+                    error!(
+                        "Replacement worker #{} failed readiness probe during reload! Aborting replacement for instance {} to preserve uptime.",
+                        new_id, instance_idx
+                    );
+                    self.event_journal.record_event(
+                        &app_name,
+                        Some(new_id),
+                        EventType::HealthcheckFailed,
+                        "Readiness probe failed during rolling reload",
+                    );
+                    let _ = new_worker.stop(timeout).await;
+                    continue;
+                }
+            }
+
             // 3. Gracefully stop old worker in background so reload doesn't block
             if let Some(pos) = self.workers.iter().position(|w| w.id == old_id) {
                 let mut old_worker = self.workers.remove(pos);
@@ -192,6 +252,16 @@ impl ProcessManager {
                     let _ = old_worker.stop(timeout).await;
                 });
             }
+
+            self.event_journal.record_event(
+                &app_name,
+                Some(new_id),
+                EventType::Reloaded,
+                &format!(
+                    "Rolling reload replaced worker #{} with #{}",
+                    old_id, new_id
+                ),
+            );
 
             self.workers.push(new_worker);
             reloaded_count += 1;
@@ -205,6 +275,109 @@ impl ProcessManager {
         }
 
         Ok(reloaded_count)
+    }
+
+    pub async fn scale(&mut self, app_name: &str, target_spec: &str) -> Result<(usize, usize)> {
+        let mut config = self
+            .apps
+            .get(app_name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("App '{}' not found in registry", app_name))?;
+
+        // Current active/known workers for this app
+        let current_count = self
+            .workers
+            .iter()
+            .filter(|w| w.app_name == app_name)
+            .count();
+
+        let target_count = if let Some(stripped) = target_spec.strip_prefix('+') {
+            let delta: usize = stripped
+                .parse()
+                .context("Invalid scale increment (e.g. +2)")?;
+            current_count + delta
+        } else if let Some(stripped) = target_spec.strip_prefix('-') {
+            let delta: usize = stripped
+                .parse()
+                .context("Invalid scale decrement (e.g. -1)")?;
+            current_count.saturating_sub(delta).max(1)
+        } else {
+            let count: usize = target_spec
+                .parse()
+                .context("Invalid scale count (e.g. 4)")?;
+            count.max(1)
+        };
+
+        if target_count == current_count {
+            return Ok((current_count, current_count));
+        }
+
+        if target_count > current_count {
+            let to_add = target_count - current_count;
+            for i in 0..to_add {
+                let id = self.next_id;
+                self.next_id += 1;
+                let mut worker = Worker::new(
+                    id,
+                    app_name.to_string(),
+                    current_count + i,
+                    config.clone(),
+                    self.log_hub.clone(),
+                );
+                if let Err(e) = worker.spawn().await {
+                    error!("Failed to spawn worker #{} during scale: {}", id, e);
+                }
+                self.workers.push(worker);
+            }
+        } else {
+            let to_remove = current_count - target_count;
+            let mut removed_ids = Vec::new();
+            for worker in self.workers.iter().rev() {
+                if worker.app_name == app_name && removed_ids.len() < to_remove {
+                    removed_ids.push(worker.id);
+                }
+            }
+            for id in &removed_ids {
+                let _ = self
+                    .stop(&TargetSelector::Id(*id), Duration::from_millis(3000))
+                    .await;
+            }
+            self.workers.retain(|w| !removed_ids.contains(&w.id));
+        }
+
+        config.instances = target_count;
+        self.apps.insert(app_name.to_string(), config);
+
+        self.event_journal.record_event(
+            app_name,
+            None,
+            EventType::Scaled,
+            &format!(
+                "Scaled from {} to {} instances",
+                current_count, target_count
+            ),
+        );
+
+        Ok((current_count, target_count))
+    }
+
+    pub fn rotate_logs(&self, target: &TargetSelector) -> usize {
+        let mut count = 0;
+        for worker in &self.workers {
+            if matches_target(worker, target) {
+                let (r1, r2) = worker.rotate_logs_now();
+                if r1 || r2 {
+                    self.event_journal.record_event(
+                        &worker.app_name,
+                        Some(worker.id),
+                        EventType::RotatedLogs,
+                        "Log file rotated and compressed",
+                    );
+                    count += 1;
+                }
+            }
+        }
+        count
     }
 
     pub async fn delete(&mut self, target: &TargetSelector, timeout: Duration) -> Result<usize> {
@@ -289,21 +462,47 @@ impl ProcessManager {
             if worker.status == ProcessStatus::Online && !worker.is_stopping() {
                 match worker.try_wait().await {
                     Ok(Some(status)) => {
-                        warn!(
-                            "[app: {}] Worker #{} (PID {:?}) exited unexpectedly with status: {}",
-                            worker.app_name, worker.id, worker.pid, status
-                        );
+                        let is_success = status.success();
+                        if is_success {
+                            info!(
+                                "[app: {}] Worker #{} (PID {:?}) exited cleanly with status: {}",
+                                worker.app_name, worker.id, worker.pid, status
+                            );
+                            self.event_journal.record_event(
+                                &worker.app_name,
+                                Some(worker.id),
+                                EventType::Exited,
+                                &format!("Clean exit (status: {})", status),
+                            );
+                        } else {
+                            warn!(
+                                "[app: {}] Worker #{} (PID {:?}) exited unexpectedly with status: {}",
+                                worker.app_name, worker.id, worker.pid, status
+                            );
+
+                            self.event_journal.record_event(
+                                &worker.app_name,
+                                Some(worker.id),
+                                EventType::Crashed,
+                                &format!(
+                                    "Crashed (exit: {}). Attempt {}/{}",
+                                    status,
+                                    worker.restarts + 1,
+                                    worker.config.max_restarts
+                                ),
+                            );
+
+                            if let Some(ref alerts) = self.alert_manager {
+                                alerts.send(AlertEvent::ProcessCrash {
+                                    app: worker.app_name.clone(),
+                                    worker_id: worker.id,
+                                    exit_code: status.to_string(),
+                                    restarts: worker.restarts,
+                                });
+                            }
+                        }
 
                         worker.pid = None;
-
-                        if let Some(ref alerts) = self.alert_manager {
-                            alerts.send(AlertEvent::ProcessCrash {
-                                app: worker.app_name.clone(),
-                                worker_id: worker.id,
-                                exit_code: status.to_string(),
-                                restarts: worker.restarts,
-                            });
-                        }
 
                         if worker.config.autorestart && worker.restarts < worker.config.max_restarts
                         {
@@ -321,15 +520,28 @@ impl ProcessManager {
 
                             let app_name = worker.app_name.clone();
                             let worker_id = worker.id;
+                            let msg = if is_success {
+                                format!(
+                                    "Process exited (exit: {}). Restarting in {}ms...",
+                                    status, delay_ms
+                                )
+                            } else {
+                                format!(
+                                    "Process crashed (exit: {}). Restarting in {}ms...",
+                                    status, delay_ms
+                                )
+                            };
+
                             self.log_hub.push(LogEntry {
                                 timestamp: Utc::now(),
                                 app_name: app_name.clone(),
                                 worker_id,
-                                stream: "err".to_string(),
-                                message: format!(
-                                    "Process crashed (exit: {}). Restarting in {}ms...",
-                                    status, delay_ms
-                                ),
+                                stream: if is_success {
+                                    "out".to_string()
+                                } else {
+                                    "err".to_string()
+                                },
+                                message: msg,
                             });
 
                             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -387,6 +599,87 @@ impl ProcessManager {
 
     pub fn get_active_configs(&self) -> Vec<ProcessConfig> {
         self.apps.values().cloned().collect()
+    }
+
+    pub fn prune(
+        &mut self,
+        dry_run: bool,
+        only_logs: bool,
+    ) -> (Vec<(u32, String)>, Vec<String>, u64) {
+        let mut removed_processes = Vec::new();
+
+        if !only_logs {
+            if dry_run {
+                for worker in &self.workers {
+                    if worker.status == ProcessStatus::Stopped
+                        || worker.status == ProcessStatus::Errored
+                    {
+                        removed_processes.push((worker.id, worker.app_name.clone()));
+                    }
+                }
+            } else {
+                let mut remaining_workers = Vec::new();
+                for worker in self.workers.drain(..) {
+                    if worker.status == ProcessStatus::Stopped
+                        || worker.status == ProcessStatus::Errored
+                    {
+                        removed_processes.push((worker.id, worker.app_name.clone()));
+                    } else {
+                        remaining_workers.push(worker);
+                    }
+                }
+                self.workers = remaining_workers;
+                let active_app_names: std::collections::HashSet<String> =
+                    self.workers.iter().map(|w| w.app_name.clone()).collect();
+                self.apps.retain(|name, _| active_app_names.contains(name));
+            }
+        }
+
+        let mut deleted_log_files = Vec::new();
+        let mut freed_bytes = 0u64;
+
+        let logs_dir = crate::common::logs_dir();
+        if logs_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&logs_dir) {
+                let valid_prefixes: Vec<String> = self
+                    .workers
+                    .iter()
+                    .map(|w| format!("{}-{}-", w.app_name, w.id))
+                    .collect();
+
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let file_name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        if file_name.ends_with(".log")
+                            || file_name.contains(".log.")
+                            || file_name.ends_with(".gz")
+                        {
+                            let is_active = valid_prefixes
+                                .iter()
+                                .any(|prefix| file_name.starts_with(prefix));
+
+                            if !is_active {
+                                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                                freed_bytes += size;
+                                deleted_log_files.push(file_name);
+
+                                if !dry_run {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        (removed_processes, deleted_log_files, freed_bytes)
     }
 
     pub fn save_state(&self, path: &Path) -> Result<()> {

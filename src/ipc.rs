@@ -69,7 +69,8 @@ impl IpcServer {
                     let alert_mgr = self.alert_manager.clone();
                     tokio::spawn(async move {
                         if let Err(e) =
-                            handle_client(stream, manager, log_hub, cron_mgr, wasm_mgr, alert_mgr).await
+                            handle_client(stream, manager, log_hub, cron_mgr, wasm_mgr, alert_mgr)
+                                .await
                         {
                             debug!("Client connection closed: {}", e);
                         }
@@ -567,7 +568,10 @@ async fn handle_client(
                 let cfg = if let Some(ref alert_mgr) = alert_manager {
                     alert_mgr.get_config()
                 } else {
-                    AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                    AlertConfig::load_global()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
                 };
                 let resp = Response::AlertConfig(cfg);
                 writer.send(serde_json::to_string(&resp)?).await?;
@@ -585,6 +589,58 @@ async fn handle_client(
                     };
                     writer.send(serde_json::to_string(&resp)?).await?;
                 }
+            }
+            Request::Scale { app, instances } => {
+                let mut mgr = manager.write().await;
+                match mgr.scale(&app, &instances).await {
+                    Ok((prev, curr)) => {
+                        let resp = Response::ScaleResult {
+                            app,
+                            previous: prev,
+                            current: curr,
+                        };
+                        writer.send(serde_json::to_string(&resp)?).await?;
+                    }
+                    Err(e) => {
+                        let resp = Response::Error {
+                            message: format!("Failed to scale app '{}': {}", app, e),
+                        };
+                        writer.send(serde_json::to_string(&resp)?).await?;
+                    }
+                }
+            }
+            Request::LogRotate(target) => {
+                let mgr = manager.read().await;
+                let rotated_count = mgr.rotate_logs(&target);
+                let resp = Response::Ok {
+                    message: format!(
+                        "Rotated logs for {} worker(s) matching {}",
+                        rotated_count, target
+                    ),
+                };
+                writer.send(serde_json::to_string(&resp)?).await?;
+            }
+            Request::Prune { dry_run, only_logs } => {
+                let mut mgr = manager.write().await;
+                let (removed_procs, deleted_logs, freed_bytes) = mgr.prune(dry_run, only_logs);
+                let resp = Response::PruneResult {
+                    removed_processes: removed_procs,
+                    deleted_log_files: deleted_logs,
+                    freed_bytes,
+                };
+                writer.send(serde_json::to_string(&resp)?).await?;
+            }
+            Request::GetEvents { target, limit } => {
+                let mgr = manager.read().await;
+                let target_name = target.and_then(|t| match t {
+                    TargetSelector::Name(n) => Some(n),
+                    _ => None,
+                });
+                let events = mgr
+                    .event_journal()
+                    .get_events(target_name.as_deref(), limit);
+                let resp = Response::EventList { events };
+                writer.send(serde_json::to_string(&resp)?).await?;
             }
             Request::Shutdown => {
                 let resp = Response::Ok {

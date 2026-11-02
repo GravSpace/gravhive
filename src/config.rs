@@ -48,6 +48,7 @@ pub struct SingleAppConfig {
     pub listen_port: Option<u16>,
     pub target_port: Option<u16>,
     pub idle_timeout_secs: Option<u64>,
+    pub health_check: Option<crate::model::HealthCheckConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +57,7 @@ pub struct LogConfig {
     pub err: Option<PathBuf>,
     pub rotate_max_size: Option<String>,
     pub rotate_keep: Option<u32>,
+    pub compress: Option<bool>,
 }
 
 pub fn parse_config_file(path: &Path) -> Result<Vec<ProcessConfig>> {
@@ -139,11 +141,19 @@ fn convert_single_app(single: SingleAppConfig, base_dir: Option<&Path>) -> Resul
 
     let cwd = single.cwd.or_else(|| base_dir.map(|p| p.to_path_buf()));
 
-    let (out_log, err_log) = if let Some(log) = single.log {
-        (log.out, log.err)
-    } else {
-        (None, None)
-    };
+    let (out_log, err_log, log_rotate_max_size, log_rotate_keep, log_compress) =
+        if let Some(log) = single.log {
+            let max_bytes = log.rotate_max_size.as_deref().and_then(parse_memory_string);
+            (
+                log.out,
+                log.err,
+                max_bytes,
+                log.rotate_keep,
+                log.compress.unwrap_or(true),
+            )
+        } else {
+            (None, None, None, None, true)
+        };
 
     let cgroup_memory_max = single
         .cgroup_memory_max
@@ -177,6 +187,10 @@ fn convert_single_app(single: SingleAppConfig, base_dir: Option<&Path>) -> Resul
         listen_port: single.listen_port,
         target_port: single.target_port,
         idle_timeout_secs: single.idle_timeout_secs,
+        log_rotate_max_size,
+        log_rotate_keep,
+        log_compress,
+        health_check: single.health_check,
     })
 }
 
