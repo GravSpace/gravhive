@@ -42,10 +42,14 @@ async fn main() -> Result<()> {
 
     // Load alert configuration if available
     let mut alert_config = AlertConfig::default();
+    if let Ok(Some(global_alerts)) = AlertConfig::load_global() {
+        info!("Loaded alert configuration from ~/.gravhive/alerts.json");
+        alert_config = global_alerts;
+    }
     if Path::new("ghive.toml").exists() {
         if let Ok((_, Some(alerts), _)) = load_ecosystem(Path::new("ghive.toml")) {
             info!("Loaded alert configuration from ghive.toml");
-            alert_config = alerts;
+            alert_config.merge(alerts);
         }
     }
     let alert_manager = AlertManager::new(alert_config);
@@ -71,7 +75,7 @@ async fn main() -> Result<()> {
     let _ = wasm_manager.load_directory(&plugins_dir);
 
     // Spawn Resource Watchdog (CPU, RAM, max_memory_restart)
-    let watchdog = Watchdog::new(manager.clone(), 3, Some(alert_manager));
+    let watchdog = Watchdog::new(manager.clone(), 3, Some(alert_manager.clone()));
     tokio::spawn(async move {
         watchdog.run_loop().await;
     });
@@ -100,7 +104,13 @@ async fn main() -> Result<()> {
     });
 
     // Run IPC server
-    let ipc_server = IpcServer::new(manager, log_hub, Some(cron_manager), Some(wasm_manager));
+    let ipc_server = IpcServer::new(
+        manager,
+        log_hub,
+        Some(cron_manager),
+        Some(wasm_manager),
+        Some(alert_manager),
+    );
     ipc_server.run().await?;
 
     Ok(())

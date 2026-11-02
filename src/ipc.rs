@@ -1,3 +1,4 @@
+use crate::alerts::{AlertConfig, AlertEvent, AlertManager};
 use crate::common::socket_path;
 use crate::cron::CronManager;
 use crate::model::{LogEntry, LogStreamType, TargetSelector};
@@ -20,6 +21,7 @@ pub struct IpcServer {
     log_hub: LogHub,
     cron_manager: Option<CronManager>,
     wasm_manager: Option<Arc<WasmPluginManager>>,
+    alert_manager: Option<AlertManager>,
 }
 
 impl IpcServer {
@@ -28,12 +30,14 @@ impl IpcServer {
         log_hub: LogHub,
         cron_manager: Option<CronManager>,
         wasm_manager: Option<Arc<WasmPluginManager>>,
+        alert_manager: Option<AlertManager>,
     ) -> Self {
         Self {
             manager,
             log_hub,
             cron_manager,
             wasm_manager,
+            alert_manager,
         }
     }
 
@@ -62,9 +66,10 @@ impl IpcServer {
                     let log_hub = self.log_hub.clone();
                     let cron_mgr = self.cron_manager.clone();
                     let wasm_mgr = self.wasm_manager.clone();
+                    let alert_mgr = self.alert_manager.clone();
                     tokio::spawn(async move {
                         if let Err(e) =
-                            handle_client(stream, manager, log_hub, cron_mgr, wasm_mgr).await
+                            handle_client(stream, manager, log_hub, cron_mgr, wasm_mgr, alert_mgr).await
                         {
                             debug!("Client connection closed: {}", e);
                         }
@@ -84,6 +89,7 @@ async fn handle_client(
     log_hub: LogHub,
     cron_manager: Option<CronManager>,
     wasm_manager: Option<Arc<WasmPluginManager>>,
+    alert_manager: Option<AlertManager>,
 ) -> Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = FramedRead::new(read_half, LinesCodec::new());
@@ -540,6 +546,45 @@ async fn handle_client(
                     message: "Log buffer flushed successfully".to_string(),
                 };
                 writer.send(serde_json::to_string(&resp)?).await?;
+            }
+            Request::UpdateAlertConfig(new_config) => {
+                if let Err(e) = new_config.save_global() {
+                    error!("Failed to save alerts config to disk: {}", e);
+                }
+                if let Some(ref alert_mgr) = alert_manager {
+                    alert_mgr.set_config(new_config.clone());
+                }
+                let mut mgr = manager.write().await;
+                if let Some(ref alert_mgr) = alert_manager {
+                    mgr.set_alert_manager(alert_mgr.clone());
+                }
+                let resp = Response::Ok {
+                    message: "Alert configuration updated successfully".to_string(),
+                };
+                writer.send(serde_json::to_string(&resp)?).await?;
+            }
+            Request::GetAlertConfig => {
+                let cfg = if let Some(ref alert_mgr) = alert_manager {
+                    alert_mgr.get_config()
+                } else {
+                    AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                };
+                let resp = Response::AlertConfig(cfg);
+                writer.send(serde_json::to_string(&resp)?).await?;
+            }
+            Request::TestAlert { message } => {
+                if let Some(ref alert_mgr) = alert_manager {
+                    let results = alert_mgr
+                        .dispatch_and_report(AlertEvent::Test { message })
+                        .await;
+                    let resp = Response::TestAlertResult { results };
+                    writer.send(serde_json::to_string(&resp)?).await?;
+                } else {
+                    let resp = Response::Error {
+                        message: "No alert manager configured on daemon".to_string(),
+                    };
+                    writer.send(serde_json::to_string(&resp)?).await?;
+                }
             }
             Request::Shutdown => {
                 let resp = Response::Ok {

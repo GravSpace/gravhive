@@ -320,6 +320,7 @@ max_restarts = 10
 | **`ghive startup`** | `[systemd\|launchd\|openrc]` | Membuat dan mengonfigurasi startup script otomatis di OS agar menyala saat reboot server. |
 | **`ghive unstartup`** | - | Menghapus integrasi startup service dari OS. |
 | **`ghive prune`** | - | Membersihkan entri proses yang berstatus `stopped` atau `errored` serta log file usang. |
+| **`ghive webhook`** / **`ghive alert`** | `set <url> [--type <t>] [--username <u>] [--channel <c>] [--chat-id <id>] [-H <k:v>]`, `list [--show-full]`, `test [-m <msg>]`, `delete <provider\|all>` | Mengelola endpoint webhook pemberitahuan (Discord, Slack, Telegram, Custom HTTP) secara persisten di `~/.gravhive/alerts.json` dan sinkron live via IPC ke daemon `ghived`. |
 
 ---
 

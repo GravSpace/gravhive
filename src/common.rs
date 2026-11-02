@@ -33,6 +33,10 @@ pub fn logs_dir() -> PathBuf {
     gravhive_dir().join("logs")
 }
 
+pub fn alerts_config_path() -> PathBuf {
+    gravhive_dir().join("alerts.json")
+}
+
 pub fn ensure_dirs() -> std::io::Result<()> {
     let dir = gravhive_dir();
     if !dir.exists() {

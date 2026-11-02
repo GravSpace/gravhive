@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
 use comfy_table::modifiers::UTF8_ROUND_CORNERS;
 use comfy_table::{Cell, Color as TableColor, ContentArrangement, Table};
+use gravhive::alerts::{
+    mask_webhook_url, AlertConfig, AlertEvent, AlertManager, DiscordConfig, SlackConfig,
+    TelegramConfig, WebhookConfig,
+};
 use gravhive::common::{ensure_dirs, socket_path};
 use gravhive::config::{generate_ecosystem_template, parse_config_file};
 use gravhive::detector::detect_runtime;
@@ -243,6 +247,77 @@ enum Commands {
         #[arg(short, long)]
         check: bool,
     },
+
+    /// Manage webhook alerts (Discord, Slack, Telegram, Custom HTTP)
+    #[command(alias = "alert", alias = "alerts")]
+    Webhook {
+        #[command(subcommand)]
+        action: Option<WebhookAction>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum WebhookAction {
+    /// Save or update a webhook endpoint URL
+    Set {
+        /// Webhook URL (or bot token for Telegram)
+        url: String,
+
+        /// Webhook provider type: discord, slack, telegram, or generic (auto-detected if omitted)
+        #[arg(short = 't', long)]
+        r#type: Option<WebhookType>,
+
+        /// Custom username for Discord embed
+        #[arg(long)]
+        username: Option<String>,
+
+        /// Custom channel for Slack
+        #[arg(long)]
+        channel: Option<String>,
+
+        /// Chat ID for Telegram
+        #[arg(long)]
+        chat_id: Option<String>,
+
+        /// Custom HTTP header in 'Header: Value' format (Generic Webhook, repeatable)
+        #[arg(short = 'H', long = "header", value_parser = parse_header_key_val)]
+        headers: Vec<(String, String)>,
+
+        /// Also note in local ghive.toml file
+        #[arg(long)]
+        save_to_config: bool,
+    },
+
+    /// Show currently configured webhook(s)
+    #[command(alias = "show", alias = "ls")]
+    List {
+        /// Unmask full webhook URLs (security sensitive)
+        #[arg(long)]
+        show_full: bool,
+    },
+
+    /// Send a test alert event to verify webhook configuration
+    Test {
+        /// Custom message text for test alert
+        #[arg(short, long, default_value = "Test notification from Gravhive")]
+        message: String,
+    },
+
+    /// Remove a configured webhook
+    #[command(alias = "rm")]
+    Delete {
+        /// Provider to remove: discord, slack, telegram, generic, or all
+        #[arg(default_value = "all")]
+        provider: String,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebhookType {
+    Discord,
+    Slack,
+    Telegram,
+    Generic,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -354,6 +429,32 @@ fn parse_key_val(s: &str) -> Result<(String, String), String> {
         .find('=')
         .ok_or_else(|| format!("Invalid KEY=VALUE: no `=` found in `{}`", s))?;
     Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+}
+
+fn parse_header_key_val(s: &str) -> std::result::Result<(String, String), String> {
+    if let Some(pos) = s.find(':') {
+        Ok((s[..pos].trim().to_string(), s[pos + 1..].trim().to_string()))
+    } else if let Some(pos) = s.find('=') {
+        Ok((s[..pos].trim().to_string(), s[pos + 1..].trim().to_string()))
+    } else {
+        Err(format!(
+            "Invalid header format: expected 'Header: Value' or 'Header=Value', got `{}`",
+            s
+        ))
+    }
+}
+
+fn detect_webhook_type(url: &str) -> WebhookType {
+    let lower = url.to_lowercase();
+    if lower.contains("discord.com/api/webhooks") {
+        WebhookType::Discord
+    } else if lower.contains("hooks.slack.com") {
+        WebhookType::Slack
+    } else if lower.contains("api.telegram.org") {
+        WebhookType::Telegram
+    } else {
+        WebhookType::Generic
+    }
 }
 
 #[tokio::main]
@@ -594,6 +695,11 @@ async fn main() -> Result<()> {
         }
         Commands::Upgrade { to, force, check } => {
             gravhive::upgrade::Upgrader::upgrade(to, force, check).await?;
+            return Ok(());
+        }
+        Commands::Webhook { action } => {
+            let action = action.unwrap_or(WebhookAction::List { show_full: false });
+            handle_webhook_command(action).await?;
             return Ok(());
         }
         _ => {}
@@ -1242,4 +1348,303 @@ fn colorize_status(status: ProcessStatus) -> ColoredString {
         ProcessStatus::Stopped => "stopped".dimmed(),
         ProcessStatus::Errored => "errored".red().bold(),
     }
+}
+
+async fn handle_webhook_command(action: WebhookAction) -> Result<()> {
+    match action {
+        WebhookAction::Set {
+            url,
+            r#type,
+            username,
+            channel,
+            chat_id,
+            headers,
+            save_to_config,
+        } => {
+            let provider_type = r#type.unwrap_or_else(|| detect_webhook_type(&url));
+            let mut cfg = if IpcClient::ping().await.is_ok() {
+                if let Ok(Response::AlertConfig(daemon_cfg)) =
+                    IpcClient::send_request(Request::GetAlertConfig).await
+                {
+                    daemon_cfg
+                } else {
+                    AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                }
+            } else {
+                AlertConfig::load_global().ok().flatten().unwrap_or_default()
+            };
+
+            match provider_type {
+                WebhookType::Discord => {
+                    cfg.discord = Some(DiscordConfig {
+                        webhook_url: url.clone(),
+                        username,
+                    });
+                }
+                WebhookType::Slack => {
+                    cfg.slack = Some(SlackConfig {
+                        webhook_url: url.clone(),
+                        channel,
+                    });
+                }
+                WebhookType::Telegram => {
+                    let cid = chat_id.ok_or_else(|| {
+                        anyhow::anyhow!("--chat-id is required when configuring a Telegram webhook/bot")
+                    })?;
+                    cfg.telegram = Some(TelegramConfig {
+                        bot_token: url.clone(),
+                        chat_id: cid,
+                    });
+                }
+                WebhookType::Generic => {
+                    let mut hdrs = HashMap::new();
+                    for (k, v) in headers {
+                        hdrs.insert(k, v);
+                    }
+                    cfg.webhook = Some(WebhookConfig {
+                        url: url.clone(),
+                        headers: hdrs,
+                    });
+                }
+            }
+
+            cfg.save_global()?;
+            println!(
+                "{} Webhook for {} saved to {}",
+                "✓".green().bold(),
+                format!("{:?}", provider_type).cyan().bold(),
+                gravhive::common::alerts_config_path().display().to_string().bold()
+            );
+
+            if save_to_config && Path::new("ghive.toml").exists() {
+                println!(
+                    "{} Local ghive.toml noted for ecosystem alerts",
+                    "✓".green().bold()
+                );
+            }
+
+            if IpcClient::ping().await.is_ok() {
+                if let Ok(Response::Ok { message }) =
+                    IpcClient::send_request(Request::UpdateAlertConfig(cfg)).await
+                {
+                    println!(
+                        "{} Live Gravhive daemon updated: {}",
+                        "✓".green().bold(),
+                        message
+                    );
+                }
+            } else {
+                println!(
+                    "{} Daemon is not currently running. Webhook will be active when Gravhive starts.",
+                    "ℹ".cyan().bold()
+                );
+            }
+
+            println!("Run `ghive webhook test` to send a test alert.");
+        }
+
+        WebhookAction::List { show_full } => {
+            let cfg = if IpcClient::ping().await.is_ok() {
+                if let Ok(Response::AlertConfig(daemon_cfg)) =
+                    IpcClient::send_request(Request::GetAlertConfig).await
+                {
+                    daemon_cfg
+                } else {
+                    AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                }
+            } else {
+                AlertConfig::load_global().ok().flatten().unwrap_or_default()
+            };
+
+            if cfg.is_empty() {
+                println!(
+                    "\nNo webhooks configured.\nUse `ghive webhook set <URL>` to add an alert endpoint.\n"
+                );
+                return Ok(());
+            }
+
+            let mut table = Table::new();
+            table
+                .load_preset(UTF8_ROUND_CORNERS)
+                .set_content_arrangement(ContentArrangement::Dynamic)
+                .set_header(vec![
+                    Cell::new("provider").fg(TableColor::Cyan),
+                    Cell::new("endpoint / token").fg(TableColor::Cyan),
+                    Cell::new("options").fg(TableColor::Cyan),
+                    Cell::new("status").fg(TableColor::Cyan),
+                ]);
+
+            if let Some(ref d) = cfg.discord {
+                let ep = if show_full {
+                    d.webhook_url.clone()
+                } else {
+                    mask_webhook_url(&d.webhook_url)
+                };
+                let opt = d
+                    .username
+                    .as_deref()
+                    .map(|u| format!("username: {}", u))
+                    .unwrap_or_else(|| "-".into());
+                table.add_row(vec![
+                    Cell::new("Discord"),
+                    Cell::new(ep),
+                    Cell::new(opt),
+                    Cell::new("active").fg(TableColor::Green),
+                ]);
+            }
+
+            if let Some(ref s) = cfg.slack {
+                let ep = if show_full {
+                    s.webhook_url.clone()
+                } else {
+                    mask_webhook_url(&s.webhook_url)
+                };
+                let opt = s
+                    .channel
+                    .as_deref()
+                    .map(|c| format!("channel: {}", c))
+                    .unwrap_or_else(|| "-".into());
+                table.add_row(vec![
+                    Cell::new("Slack"),
+                    Cell::new(ep),
+                    Cell::new(opt),
+                    Cell::new("active").fg(TableColor::Green),
+                ]);
+            }
+
+            if let Some(ref tg) = cfg.telegram {
+                let ep = if show_full {
+                    tg.bot_token.clone()
+                } else {
+                    mask_webhook_url(&tg.bot_token)
+                };
+                let opt = format!("chat_id: {}", tg.chat_id);
+                table.add_row(vec![
+                    Cell::new("Telegram"),
+                    Cell::new(ep),
+                    Cell::new(opt),
+                    Cell::new("active").fg(TableColor::Green),
+                ]);
+            }
+
+            if let Some(ref w) = cfg.webhook {
+                let ep = if show_full {
+                    w.url.clone()
+                } else {
+                    mask_webhook_url(&w.url)
+                };
+                let opt = if w.headers.is_empty() {
+                    "-".to_string()
+                } else {
+                    format!("{} custom header(s)", w.headers.len())
+                };
+                table.add_row(vec![
+                    Cell::new("Generic Webhook"),
+                    Cell::new(ep),
+                    Cell::new(opt),
+                    Cell::new("active").fg(TableColor::Green),
+                ]);
+            }
+
+            println!("\n{}\n", table);
+        }
+
+        WebhookAction::Test { message } => {
+            println!("{} Dispatching test alert event...", "●".cyan().bold());
+            let reports = if IpcClient::ping().await.is_ok() {
+                match IpcClient::send_request(Request::TestAlert {
+                    message: message.clone(),
+                })
+                .await
+                {
+                    Ok(Response::TestAlertResult { results }) => results,
+                    Ok(Response::Error { message: err }) => {
+                        eprintln!("{} Failed to test alerts: {}", "✗".red().bold(), err);
+                        return Ok(());
+                    }
+                    _ => Vec::new(),
+                }
+            } else {
+                let cfg = AlertConfig::load_global().ok().flatten().unwrap_or_default();
+                if cfg.is_empty() {
+                    eprintln!(
+                        "{} No webhooks configured. Run `ghive webhook set <URL>` first.",
+                        "✗".red().bold()
+                    );
+                    return Ok(());
+                }
+                let alert_mgr = AlertManager::new(cfg);
+                alert_mgr
+                    .dispatch_and_report(AlertEvent::Test { message })
+                    .await
+            };
+
+            if reports.is_empty() {
+                eprintln!("{} No webhook endpoints were reached.", "✗".red().bold());
+            } else {
+                for (provider, success, msg) in reports {
+                    if success {
+                        println!("  {} {}: {}", "✓".green().bold(), provider.bold(), msg);
+                    } else {
+                        eprintln!("  {} {}: {}", "✗".red().bold(), provider.bold(), msg);
+                    }
+                }
+            }
+        }
+
+        WebhookAction::Delete { provider } => {
+            let mut cfg = if IpcClient::ping().await.is_ok() {
+                if let Ok(Response::AlertConfig(daemon_cfg)) =
+                    IpcClient::send_request(Request::GetAlertConfig).await
+                {
+                    daemon_cfg
+                } else {
+                    AlertConfig::load_global().ok().flatten().unwrap_or_default()
+                }
+            } else {
+                AlertConfig::load_global().ok().flatten().unwrap_or_default()
+            };
+
+            match provider.to_lowercase().as_str() {
+                "discord" => {
+                    cfg.discord = None;
+                    println!("{} Removed Discord webhook", "✓".green().bold());
+                }
+                "slack" => {
+                    cfg.slack = None;
+                    println!("{} Removed Slack webhook", "✓".green().bold());
+                }
+                "telegram" => {
+                    cfg.telegram = None;
+                    println!("{} Removed Telegram webhook", "✓".green().bold());
+                }
+                "generic" | "webhook" => {
+                    cfg.webhook = None;
+                    println!("{} Removed Generic Webhook", "✓".green().bold());
+                }
+                "all" => {
+                    cfg.discord = None;
+                    cfg.slack = None;
+                    cfg.telegram = None;
+                    cfg.webhook = None;
+                    println!("{} Cleared all webhook configurations", "✓".green().bold());
+                }
+                other => {
+                    eprintln!(
+                        "{} Unknown provider '{}'. Valid options: discord, slack, telegram, generic, all",
+                        "✗".red().bold(),
+                        other
+                    );
+                    return Ok(());
+                }
+            }
+
+            cfg.save_global()?;
+            if IpcClient::ping().await.is_ok() {
+                let _ = IpcClient::send_request(Request::UpdateAlertConfig(cfg)).await;
+            }
+        }
+    }
+
+    Ok(())
 }

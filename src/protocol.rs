@@ -1,5 +1,6 @@
 #![allow(clippy::large_enum_variant)]
 
+use crate::alerts::AlertConfig;
 use crate::cron::CronJobInfo;
 use crate::model::{LogEntry, LogStreamType, ProcessConfig, ProcessItem, TargetSelector};
 use crate::wasm::PluginInfo;
@@ -34,6 +35,11 @@ pub enum Request {
     CronRestart(String),
     CronDelete(String),
     PluginList,
+    UpdateAlertConfig(AlertConfig),
+    GetAlertConfig,
+    TestAlert {
+        message: String,
+    },
     Shutdown,
 }
 
@@ -57,6 +63,10 @@ pub enum Response {
     },
     PluginList {
         plugins: Vec<PluginInfo>,
+    },
+    AlertConfig(AlertConfig),
+    TestAlertResult {
+        results: Vec<(String, bool, String)>,
     },
     LogLine(LogEntry),
     Error {

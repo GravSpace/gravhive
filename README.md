@@ -386,6 +386,61 @@ ghive upgrade --force
 # sudo ghive upgrade
 ```
 
+### 15. Smart Alerting & Webhooks (`ghive webhook` / `ghive alert`) 🔔
+
+Gravhive mendukung notifikasi langsung ke **Discord**, **Slack**, **Telegram**, dan **Generic HTTP Webhook** saat worker crash (`ProcessCrash`), memori melebihi batas (`MemoryLimitExceeded`), reload sukses (`ReloadSuccess`), atau hasil deployment (`DeployResult`).
+
+Webhook disimpan secara persisten di `~/.gravhive/alerts.json` dan otomatis terhubung secara live (*hot reload*) ke daemon `ghived` yang sedang berjalan via IPC tanpa perlu restart daemon.
+
+#### Menyimpan & Mengonfigurasi Webhook (`ghive webhook set`):
+```bash
+# 1. Simpan Discord Webhook (otomatis mendeteksi tipe Discord dari URL)
+ghive webhook set https://discord.com/api/webhooks/12345/abcdef --username "Gravhive Alert"
+
+# 2. Simpan Slack Webhook (otomatis mendeteksi tipe Slack)
+ghive webhook set https://hooks.slack.com/services/T00/B00/X00 --channel "#server-alerts"
+
+# 3. Simpan Telegram Bot (dengan chat ID)
+ghive webhook set 123456:ABC-DEF --chat-id 987654321
+
+# 4. Simpan Generic Webhook kustom dengan header HTTP
+ghive webhook set https://api.perusahaan.com/alerts/webhook -H "Authorization: Bearer token123"
+```
+
+#### Menampilkan Webhook Tersimpan (`ghive webhook list`):
+```bash
+# Menampilkan tabel konfigurasi dengan token tersamarkan [REDACTED]
+ghive webhook list
+# atau alias cepat:
+ghive webhook
+
+# Tampilkan URL penuh tanpa sensor:
+ghive webhook list --show-full
+```
+
+#### Menguji Konektivitas Webhook (`ghive webhook test`):
+```bash
+# Kirim notifikasi uji coba ke semua webhook yang terkonfigurasi
+ghive webhook test
+
+# Kirim dengan pesan kustom
+ghive webhook test --message "Uji coba alert dari server produksi"
+```
+
+#### Menghapus Webhook (`ghive webhook delete`):
+```bash
+# Hapus webhook Discord
+ghive webhook delete discord
+
+# Hapus webhook Slack
+ghive webhook delete slack
+
+# Atau bersihkan semua webhook sekaligus
+ghive webhook delete all
+```
+
+> **Tips:** Anda juga dapat menggunakan alias `ghive alert` atau `ghive alerts`.
+
 ---
 
 ## ⚙️ Format File Konfigurasi Lengkap (`ghive.toml`)
