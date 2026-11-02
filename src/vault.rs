@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 const DEFAULT_VAULT_FILE: &str = "vault.enc";
 const NONCE_LEN: usize = 12;
 
+static IN_MEMORY_KEY_CACHE: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VaultData {
     pub secrets: HashMap<String, String>,
@@ -20,7 +22,9 @@ pub struct SecretVault;
 
 impl SecretVault {
     pub fn get_master_key() -> Result<[u8; 32]> {
-        if let Ok(key_str) = std::env::var("GHIVE_MASTER_KEY") {
+        if let Ok(key_str) =
+            std::env::var("GHIVE_MASTER_KEY").or_else(|_| std::env::var("GRAVHIVE_MASTER_KEY"))
+        {
             let trimmed = key_str.trim();
             if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
                 let mut key = [0u8; 32];
@@ -58,6 +62,16 @@ impl SecretVault {
             }
         }
 
+        // If already cached in memory during this process, reuse it
+        if let Some(cached) = IN_MEMORY_KEY_CACHE.get() {
+            return Ok(*cached);
+        }
+
+        // Ensure ~/.gravhive parent directory exists before creating master.key
+        if let Some(parent) = key_file.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
         // Generate and save 32-byte master key
         let mut key = [0u8; 32];
         let now = chrono::Utc::now()
@@ -68,6 +82,7 @@ impl SecretVault {
                 ((now >> (i % 8 * 8)) & 0xFF) as u8 ^ ((i as u8).wrapping_mul(13).wrapping_add(47));
         }
         let _ = fs::write(&key_file, key);
+        let _ = IN_MEMORY_KEY_CACHE.set(key);
         Ok(key)
     }
 
