@@ -11,7 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+pub const DEFAULT_CRON_TIMEOUT: Duration = Duration::from_secs(1800); // 30 minutes
+pub const MAX_CRON_LOG_CAPTURE_BYTES: usize = 65536; // 64 KB limit to prevent memory bloat
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJobInfo {
@@ -221,29 +224,59 @@ impl CronManager {
                             c
                         };
 
-                        let output = cmd.output().await;
-                        let status_str = match output {
-                            Ok(out) => {
-                                let stdout = String::from_utf8_lossy(&out.stdout);
-                                let stderr = String::from_utf8_lossy(&out.stderr);
+                        // Execute with timeout and capped output buffer to prevent resource exhaustion / DoS
+                        let status_str = match tokio::time::timeout(
+                            DEFAULT_CRON_TIMEOUT,
+                            cmd.output(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(out)) => {
+                                let stdout_len = out.stdout.len();
+                                let stderr_len = out.stderr.len();
 
-                                if !stdout.trim().is_empty() {
+                                let stdout_slice = if stdout_len > MAX_CRON_LOG_CAPTURE_BYTES {
+                                    &out.stdout[..MAX_CRON_LOG_CAPTURE_BYTES]
+                                } else {
+                                    &out.stdout[..]
+                                };
+                                let stderr_slice = if stderr_len > MAX_CRON_LOG_CAPTURE_BYTES {
+                                    &out.stderr[..MAX_CRON_LOG_CAPTURE_BYTES]
+                                } else {
+                                    &out.stderr[..]
+                                };
+
+                                let mut stdout =
+                                    String::from_utf8_lossy(stdout_slice).trim().to_string();
+                                if stdout_len > MAX_CRON_LOG_CAPTURE_BYTES {
+                                    stdout
+                                        .push_str("\n... [output truncated due to 64KB log limit]");
+                                }
+
+                                let mut stderr =
+                                    String::from_utf8_lossy(stderr_slice).trim().to_string();
+                                if stderr_len > MAX_CRON_LOG_CAPTURE_BYTES {
+                                    stderr
+                                        .push_str("\n... [output truncated due to 64KB log limit]");
+                                }
+
+                                if !stdout.is_empty() {
                                     log_hub.push(LogEntry {
                                         timestamp: Utc::now(),
                                         app_name: format!("cron:{}", name),
                                         worker_id: 0,
                                         stream: "out".to_string(),
-                                        message: stdout.trim().to_string(),
+                                        message: stdout,
                                     });
                                 }
 
-                                if !stderr.trim().is_empty() {
+                                if !stderr.is_empty() {
                                     log_hub.push(LogEntry {
                                         timestamp: Utc::now(),
                                         app_name: format!("cron:{}", name),
                                         worker_id: 0,
                                         stream: "err".to_string(),
-                                        message: stderr.trim().to_string(),
+                                        message: stderr,
                                     });
                                 }
 
@@ -253,9 +286,20 @@ impl CronManager {
                                     format!("Failed ({})", out.status)
                                 }
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 error!("[CRON] Failed to spawn job '{}': {}", name, e);
                                 format!("Error: {}", e)
+                            }
+                            Err(_) => {
+                                warn!("[CRON] Job '{}' exceeded maximum timeout of 30 minutes, terminated", name);
+                                log_hub.push(LogEntry {
+                                    timestamp: Utc::now(),
+                                    app_name: format!("cron:{}", name),
+                                    worker_id: 0,
+                                    stream: "err".to_string(),
+                                    message: "[CRON ERROR] Job exceeded maximum execution timeout of 30 minutes".to_string(),
+                                });
+                                "Timed Out (30m)".to_string()
                             }
                         };
 

@@ -338,8 +338,12 @@ enum Commands {
         target: String,
     },
 
-    /// Expose Prometheus metrics on HTTP endpoint (default port 9615)
+    /// Expose Prometheus metrics on HTTP endpoint (default localhost:9615)
     Metrics {
+        /// Host address to bind the metrics server to (default 127.0.0.1; use 0.0.0.0 to expose externally)
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
         /// Port to serve Prometheus metrics on
         #[arg(short, long, default_value = "9615")]
         port: u16,
@@ -833,8 +837,8 @@ async fn main() -> Result<()> {
             handle_webhook_command(action).await?;
             return Ok(());
         }
-        Commands::Metrics { port } => {
-            gravhive::metrics::start_metrics_server(port).await?;
+        Commands::Metrics { host, port } => {
+            gravhive::metrics::start_metrics_server(&host, port).await?;
             return Ok(());
         }
         Commands::Doctor => {

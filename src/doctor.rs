@@ -98,6 +98,26 @@ impl Doctor {
         if key_file.exists() {
             if let Ok(metadata) = std::fs::metadata(&key_file) {
                 let len = metadata.len();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = metadata.permissions().mode() & 0o777;
+                    if mode > 0o600 {
+                        return DiagnosticItem {
+                            category: "Security".to_string(),
+                            name: "Vault Master Key".to_string(),
+                            status: DiagnosticStatus::Warn,
+                            message: format!(
+                                "Master key permissions are overly permissive (mode {:o}, recommended 0600)",
+                                mode
+                            ),
+                            recommendation: Some(
+                                "Run `chmod 600 ~/.gravhive/master.key` to restrict access."
+                                    .to_string(),
+                            ),
+                        };
+                    }
+                }
                 if len == 32 || len == 64 {
                     return DiagnosticItem {
                         category: "Security".to_string(),

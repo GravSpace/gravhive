@@ -55,6 +55,20 @@ pub enum MeshMessage {
 
 pub type NodeRegistry = Arc<RwLock<HashMap<String, (NodeInfo, Vec<ProcessItem>)>>>;
 
+/// Constant-time string equality check to mitigate timing side-channel attacks on tokens
+pub fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 #[derive(Clone)]
 pub struct MeshCoordinator {
     port: u16,
@@ -136,7 +150,7 @@ impl MeshCoordinator {
 
             match msg {
                 MeshMessage::Register { name, token, os } => {
-                    if token != self.token {
+                    if !constant_time_eq(&token, &self.token) {
                         let err = MeshMessage::Error("Invalid cluster token".to_string());
                         writer.send(serde_json::to_string(&err)?).await?;
                         return Ok(());
@@ -170,7 +184,7 @@ impl MeshCoordinator {
                     mem,
                     processes,
                 } => {
-                    if token != self.token {
+                    if !constant_time_eq(&token, &self.token) {
                         let err = MeshMessage::Error("Invalid cluster token".to_string());
                         writer.send(serde_json::to_string(&err)?).await?;
                         return Ok(());
@@ -205,7 +219,7 @@ impl MeshCoordinator {
                     writer.send(serde_json::to_string(&resp)?).await?;
                 }
                 MeshMessage::ListNodes { token } => {
-                    if token != self.token {
+                    if !constant_time_eq(&token, &self.token) {
                         let err = MeshMessage::Error("Invalid cluster token".to_string());
                         writer.send(serde_json::to_string(&err)?).await?;
                         return Ok(());
@@ -217,7 +231,7 @@ impl MeshCoordinator {
                     writer.send(serde_json::to_string(&resp)?).await?;
                 }
                 MeshMessage::AggregateProcesses { token } => {
-                    if token != self.token {
+                    if !constant_time_eq(&token, &self.token) {
                         let err = MeshMessage::Error("Invalid cluster token".to_string());
                         writer.send(serde_json::to_string(&err)?).await?;
                         return Ok(());
@@ -409,5 +423,19 @@ impl MeshAgent {
         } else {
             bail!("Coordinator closed connection without response");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_constant_time_eq() {
+        assert!(constant_time_eq("supersecrettoken", "supersecrettoken"));
+        assert!(!constant_time_eq("supersecrettoken", "wrongtoken"));
+        assert!(!constant_time_eq("supersecrettoken", "supersecrettokenX"));
+        assert!(!constant_time_eq("", "token"));
+        assert!(constant_time_eq("", ""));
     }
 }

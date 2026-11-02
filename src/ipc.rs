@@ -57,6 +57,12 @@ impl IpcServer {
         let listener = UnixListener::bind(&sock_path)
             .with_context(|| format!("Failed to bind Unix socket at {:?}", sock_path))?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o600));
+        }
+
         info!("Gravhive daemon IPC server listening on {:?}", sock_path);
 
         loop {
@@ -92,6 +98,25 @@ async fn handle_client(
     wasm_manager: Option<Arc<WasmPluginManager>>,
     alert_manager: Option<AlertManager>,
 ) -> Result<()> {
+    #[cfg(unix)]
+    {
+        if let Ok(ucred) = stream.peer_cred() {
+            let current_uid = nix::unistd::getuid().as_raw();
+            let peer_uid = ucred.uid();
+            if peer_uid != current_uid && peer_uid != 0 {
+                error!(
+                    "Rejected unauthorized IPC client connection from peer UID {} (daemon UID is {})",
+                    peer_uid, current_uid
+                );
+                anyhow::bail!(
+                    "Unauthorized: peer UID {} does not match daemon UID {}",
+                    peer_uid,
+                    current_uid
+                );
+            }
+        }
+    }
+
     let (read_half, write_half) = stream.into_split();
     let mut reader = FramedRead::new(read_half, LinesCodec::new());
     let mut writer = FramedWrite::new(write_half, LinesCodec::new());

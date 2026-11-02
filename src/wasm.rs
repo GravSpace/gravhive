@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
-use wasmi::{Caller, Engine, Func, Linker, Module, Store};
+use wasmi::{Caller, Config, Engine, Func, Linker, Module, Store};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
@@ -25,9 +25,11 @@ pub struct WasmPluginManager {
 
 impl WasmPluginManager {
     pub fn new() -> Self {
+        let mut config = Config::default();
+        config.consume_fuel(true);
         Self {
             plugins: Arc::new(Mutex::new(Vec::new())),
-            engine: Engine::default(),
+            engine: Engine::new(&config),
         }
     }
 
@@ -71,6 +73,8 @@ impl WasmPluginManager {
             .to_string();
 
         let mut store = Store::new(&self.engine, ());
+        // Allocate 10,000,000 fuel units to prevent runaway execution / infinite loops
+        let _ = store.set_fuel(10_000_000);
         let mut linker = <Linker<()>>::new(&self.engine);
 
         // Define a host logging function callable from WASM: host_log(i32, i32)

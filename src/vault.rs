@@ -3,7 +3,9 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use anyhow::{bail, Context, Result};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,10 +35,12 @@ impl SecretVault {
                 }
                 return Ok(key);
             }
+            // Cryptographically derive 32-byte key from arbitrary passphrase using SHA-256
+            let mut hasher = Sha256::new();
+            hasher.update(trimmed.as_bytes());
+            let hash_output = hasher.finalize();
             let mut key = [0u8; 32];
-            for (i, &b) in trimmed.as_bytes().iter().enumerate() {
-                key[i % 32] = key[i % 32].wrapping_add(b).wrapping_mul(31);
-            }
+            key.copy_from_slice(&hash_output);
             return Ok(key);
         }
 
@@ -72,16 +76,15 @@ impl SecretVault {
             let _ = fs::create_dir_all(parent);
         }
 
-        // Generate and save 32-byte master key
+        // Generate and save 32-byte cryptographically secure master key (CSPRNG)
         let mut key = [0u8; 32];
-        let now = chrono::Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or(987654321);
-        for (i, byte) in key.iter_mut().enumerate() {
-            *byte =
-                ((now >> (i % 8 * 8)) & 0xFF) as u8 ^ ((i as u8).wrapping_mul(13).wrapping_add(47));
-        }
+        rand::rngs::OsRng.fill_bytes(&mut key);
         let _ = fs::write(&key_file, key);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&key_file, fs::Permissions::from_mode(0o600));
+        }
         let _ = IN_MEMORY_KEY_CACHE.set(key);
         Ok(key)
     }
@@ -90,14 +93,9 @@ impl SecretVault {
         let cipher = Aes256Gcm::new_from_slice(key)
             .map_err(|e| anyhow::anyhow!("Invalid AES-GCM key: {}", e))?;
 
-        // Generate nonce (12 bytes)
+        // Generate cryptographically secure nonce (12 bytes) using CSPRNG
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        let now = chrono::Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or(123456789);
-        for (i, byte) in nonce_bytes.iter_mut().enumerate().take(NONCE_LEN) {
-            *byte = ((now >> ((i % 8) * 8)) & 0xFF) as u8 ^ ((i as u8).wrapping_mul(17));
-        }
+        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from(nonce_bytes);
 
         let ciphertext = cipher
@@ -154,6 +152,11 @@ impl SecretVault {
         let json = serde_json::to_vec(data)?;
         let encrypted = Self::encrypt(&json, &key)?;
         fs::write(&path, encrypted)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
         Ok(())
     }
 
@@ -186,6 +189,11 @@ impl SecretVault {
         let key = Self::get_master_key()?;
         let encrypted = Self::encrypt(&content, &key)?;
         fs::write(output_path, encrypted)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(output_path, fs::Permissions::from_mode(0o600));
+        }
         Ok(())
     }
 
@@ -233,6 +241,20 @@ mod tests {
     }
 
     #[test]
+    fn test_csprng_entropy_and_uniqueness() {
+        let key = [99u8; 32];
+        let data = b"Sensitive Payload 12345";
+        let mut nonces = std::collections::HashSet::new();
+
+        for _ in 0..100 {
+            let encrypted = SecretVault::encrypt(data, &key).expect("Encryption failed");
+            assert!(encrypted.len() > NONCE_LEN);
+            let nonce = encrypted[..NONCE_LEN].to_vec();
+            assert!(nonces.insert(nonce), "CSPRNG produced duplicate nonce!");
+        }
+    }
+
+    #[test]
     fn test_mask_secret_value() {
         assert_eq!(mask_secret_value("abc"), "****");
         assert_eq!(mask_secret_value("my_super_secret"), "my****");
@@ -247,5 +269,23 @@ mod tests {
         assert!(!redacted.contains("super_secret_pw"));
         assert!(!redacted.contains("tok_123456789"));
         assert!(redacted.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_passphrase_key_derivation() {
+        std::env::set_var("GHIVE_MASTER_KEY", "my-secure-production-passphrase-2026");
+        let key1 = SecretVault::get_master_key().expect("Failed to derive master key");
+        assert_ne!(key1, [0u8; 32]);
+
+        // Key must be deterministic
+        let key2 = SecretVault::get_master_key().expect("Failed to derive master key");
+        assert_eq!(key1, key2);
+
+        // Different passphrase produces completely different key
+        std::env::set_var("GHIVE_MASTER_KEY", "another-passphrase");
+        let key3 = SecretVault::get_master_key().expect("Failed to derive master key");
+        assert_ne!(key1, key3);
+
+        std::env::remove_var("GHIVE_MASTER_KEY");
     }
 }

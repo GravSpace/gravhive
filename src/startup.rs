@@ -34,6 +34,7 @@ pub fn generate_startup_script() -> Result<()> {
 fn generate_systemd_service() -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let ghived_exe = current_exe.with_file_name("ghived");
+    let current_user = std::env::var("USER").unwrap_or_else(|_| "nobody".to_string());
 
     let service_content = format!(
         r#"[Unit]
@@ -42,14 +43,17 @@ After=network.target
 
 [Service]
 Type=simple
+User={}
 ExecStart={}
 Restart=always
 RestartSec=3
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:$PATH
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 "#,
+        current_user,
         ghived_exe.display()
     );
 
@@ -61,6 +65,7 @@ WantedBy=multi-user.target
     );
     println!("  sudo systemctl daemon-reload");
     println!("  sudo systemctl enable --now gravhive");
+    println!("\nTip: To run as an unprivileged user service without root, place unit in ~/.config/systemd/user/gravhive.service and run `systemctl --user enable --now gravhive`.");
     Ok(())
 }
 

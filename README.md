@@ -530,11 +530,14 @@ ghive run app.js --env-file .env
 Gravhive menyediakan HTTP Prometheus / OpenMetrics exporter bawaan berkecepatan tinggi tanpa dependensi tambahan. Endpoint ini juga menyertakan metrik yang 100% kompatibel dengan dashboard PM2 Grafana standar (`pm2_up`, `pm2_process_cpu`, `pm2_process_memory`, `pm2_process_status`, `pm2_process_restarts`).
 
 ```bash
-# Menjalankan Prometheus exporter pada port default 9615 (http://0.0.0.0:9615/metrics)
+# Menjalankan Prometheus exporter pada port default 9615 (localhost: http://127.0.0.1:9615/metrics)
 ghive metrics
 
-# Menjalankan pada custom port
-ghive metrics --port 9090
+# Mengekspos exporter ke seluruh interface publik (0.0.0.0)
+ghive metrics --host 0.0.0.0
+
+# Menjalankan pada custom host & port
+ghive metrics --host 0.0.0.0 --port 9090
 ```
 
 #### Contoh Konfigurasi Scrape `prometheus.yml`:

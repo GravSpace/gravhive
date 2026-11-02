@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use colored::*;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -203,12 +204,74 @@ impl Upgrader {
             .await
             .context("Failed to read asset payload")?;
 
-        // Prepare temporary extraction directory
-        let temp_dir = std::env::temp_dir().join(format!("gravhive_update_{}", std::process::id()));
+        // Cryptographic integrity check: verify SHA-256 hash if checksum asset exists
+        let checksum_asset = release.assets.iter().find(|a| {
+            a.name.eq_ignore_ascii_case("checksums.txt")
+                || a.name.eq_ignore_ascii_case("sha256sums")
+                || a.name == format!("{}.sha256", asset.name)
+        });
+
+        if let Some(c_asset) = checksum_asset {
+            println!(
+                "{} Verifying SHA-256 integrity against {}...",
+                "🔒".cyan(),
+                c_asset.name.bold()
+            );
+            if let Ok(c_resp) = client.get(&c_asset.browser_download_url).send().await {
+                if let Ok(c_text) = c_resp.text().await {
+                    let mut hasher = Sha256::new();
+                    hasher.update(&bytes);
+                    let computed_hash = format!("{:x}", hasher.finalize());
+
+                    let mut matched = false;
+                    for line in c_text.lines() {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if let Some(expected_hash) = parts.first() {
+                            if expected_hash.eq_ignore_ascii_case(&computed_hash) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if matched {
+                        println!(
+                            "{} SHA-256 checksum verified: {}",
+                            "✓".green().bold(),
+                            &computed_hash[..16]
+                        );
+                    } else {
+                        bail!(
+                            "Security integrity failure: SHA-256 hash {} did not match release checksums in {}",
+                            computed_hash,
+                            c_asset.name
+                        );
+                    }
+                }
+            }
+        }
+
+        // Prepare private temporary extraction directory in ~/.gravhive/tmp_upgrade (mode 0700)
+        // to protect against local TOCTOU / shared-temp-dir binary tampering attacks.
+        let upgrade_base = crate::common::gravhive_dir().join("tmp_upgrade");
+        if !upgrade_base.exists() {
+            fs::create_dir_all(&upgrade_base)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&upgrade_base, fs::Permissions::from_mode(0o700));
+            }
+        }
+        let temp_dir = upgrade_base.join(format!("update_{}", std::process::id()));
         if temp_dir.exists() {
             let _ = fs::remove_dir_all(&temp_dir);
         }
         fs::create_dir_all(&temp_dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&temp_dir, fs::Permissions::from_mode(0o700));
+        }
 
         let archive_path = temp_dir.join("release.tar.gz");
         fs::write(&archive_path, &bytes)?;

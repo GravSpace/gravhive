@@ -7,8 +7,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
+
+pub const MAX_CONCURRENT_SOCKET_CONNECTIONS: usize = 1024;
 
 pub struct SocketActivationManager {
     manager: Arc<RwLock<ProcessManager>>,
@@ -63,15 +65,19 @@ impl SocketActivationManager {
             listen_port, target_port, app, idle_timeout_secs
         );
 
+        let connection_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_SOCKET_CONNECTIONS));
+
         // Spawn TCP Listener for on-demand activation
         tokio::spawn(async move {
-            let addr = format!("0.0.0.0:{}", listen_port);
+            let bind_host =
+                std::env::var("GHIVE_SOCKET_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+            let addr = format!("{}:{}", bind_host, listen_port);
             let listener = match TcpListener::bind(&addr).await {
                 Ok(l) => l,
                 Err(e) => {
                     error!(
-                        "[SOCKET-ACTIVATION] Failed to bind port {}: {}",
-                        listen_port, e
+                        "[SOCKET-ACTIVATION] Failed to bind {} (port {}): {}",
+                        addr, listen_port, e
                     );
                     return;
                 }
@@ -80,6 +86,18 @@ impl SocketActivationManager {
             loop {
                 match listener.accept().await {
                     Ok((mut client_stream, client_addr)) => {
+                        let permit = match connection_semaphore.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                warn!(
+                                    "[SOCKET-ACTIVATION] Max concurrent connections ({}) reached on port {}, rejecting connection from {}",
+                                    MAX_CONCURRENT_SOCKET_CONNECTIONS, listen_port, client_addr
+                                );
+                                drop(client_stream);
+                                continue;
+                            }
+                        };
+
                         debug!(
                             "[SOCKET-ACTIVATION] Incoming connection from {} on port {}",
                             client_addr, listen_port
@@ -100,6 +118,7 @@ impl SocketActivationManager {
                         };
 
                         tokio::spawn(async move {
+                            let _permit = permit;
                             // Update last active
                             {
                                 let mut la = last_active_arc.write().await;

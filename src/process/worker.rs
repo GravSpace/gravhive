@@ -110,14 +110,41 @@ impl Worker {
         #[cfg(unix)]
         {
             use nix::unistd::{Group, User};
-            if let Some(ref grp) = self.config.group {
-                if let Ok(Some(g)) = Group::from_name(grp) {
-                    cmd.gid(g.gid.as_raw());
-                }
+
+            let target_gid = self
+                .config
+                .group
+                .as_ref()
+                .and_then(|grp| Group::from_name(grp).ok().flatten().map(|g| g.gid));
+            let target_user = self
+                .config
+                .user
+                .as_ref()
+                .and_then(|usr| User::from_name(usr).ok().flatten());
+
+            if let Some(gid) = target_gid {
+                cmd.gid(gid.as_raw());
             }
-            if let Some(ref usr) = self.config.user {
-                if let Ok(Some(u)) = User::from_name(usr) {
-                    cmd.uid(u.uid.as_raw());
+
+            if let Some(user) = target_user {
+                let user_name = std::ffi::CString::new(user.name.clone()).ok();
+                let user_gid = user.gid.as_raw();
+                let user_uid = user.uid;
+
+                unsafe {
+                    cmd.pre_exec(move || {
+                        // Drop supplementary groups to prevent privilege retention
+                        if let Some(ref uname) = user_name {
+                            #[cfg(target_os = "macos")]
+                            let _ = libc::initgroups(uname.as_ptr(), user_gid as libc::c_int);
+                            #[cfg(not(target_os = "macos"))]
+                            let _ = libc::initgroups(uname.as_ptr(), user_gid as libc::gid_t);
+                        } else {
+                            let _ = libc::setgroups(1, &user_gid as *const _ as *const libc::gid_t);
+                        }
+                        nix::unistd::setuid(user_uid)?;
+                        Ok(())
+                    });
                 }
             }
         }

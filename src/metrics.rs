@@ -144,16 +144,16 @@ pub async fn fetch_metrics_from_daemon() -> Result<Vec<ProcessItem>> {
     }
 }
 
-/// Runs a lightweight HTTP server serving Prometheus metrics on the given port.
-pub async fn start_metrics_server(port: u16) -> Result<()> {
-    let addr = format!("0.0.0.0:{}", port);
+/// Runs a lightweight HTTP server serving Prometheus metrics on the given host and port.
+pub async fn start_metrics_server(host: &str, port: u16) -> Result<()> {
+    let addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&addr)
         .await
         .with_context(|| format!("Failed to bind metrics exporter on {}", addr))?;
 
     println!(
-        "\x1b[32m[GravHive Metrics]\x1b[0m Prometheus exporter listening on http://0.0.0.0:{}/metrics",
-        port
+        "\x1b[32m[GravHive Metrics]\x1b[0m Prometheus exporter listening on http://{}:{}/metrics",
+        host, port
     );
 
     loop {

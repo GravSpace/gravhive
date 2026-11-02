@@ -95,6 +95,11 @@ impl AlertConfig {
         let content = serde_json::to_string_pretty(self)?;
         std::fs::write(&path, content)
             .with_context(|| format!("Failed to write alert config to {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
         Ok(())
     }
 
@@ -121,6 +126,18 @@ impl AlertConfig {
     }
 }
 
+pub fn is_valid_webhook_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+        return false;
+    }
+    // Block common cloud metadata IPs to prevent SSRF
+    if trimmed.contains("169.254.169.254") || trimmed.contains("metadata.google.internal") {
+        return false;
+    }
+    true
+}
+
 pub fn mask_webhook_url(url: &str) -> String {
     if let Some((base, secret)) = url.rsplit_once('/') {
         if secret.len() > 8 {
@@ -143,9 +160,13 @@ pub struct AlertManager {
 
 impl AlertManager {
     pub fn new(config: AlertConfig) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             config: Arc::new(RwLock::new(config)),
-            client: Client::new(),
+            client,
         }
     }
 
@@ -452,5 +473,18 @@ mod tests {
         };
         mgr.set_config(new_cfg.clone());
         assert_eq!(mgr.get_config(), new_cfg);
+    }
+
+    #[test]
+    fn test_is_valid_webhook_url() {
+        assert!(is_valid_webhook_url(
+            "https://discord.com/api/webhooks/123/abc"
+        ));
+        assert!(is_valid_webhook_url("http://example.com/webhook"));
+        assert!(!is_valid_webhook_url("ftp://example.com/bad"));
+        assert!(!is_valid_webhook_url("file:///etc/passwd"));
+        assert!(!is_valid_webhook_url(
+            "http://169.254.169.254/latest/meta-data/"
+        ));
     }
 }

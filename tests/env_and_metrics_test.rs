@@ -96,7 +96,7 @@ fn test_prometheus_metrics_output_conformance() {
 async fn test_metrics_http_server_endpoint() {
     let port = 19615;
     tokio::spawn(async move {
-        let _ = gravhive::metrics::start_metrics_server(port).await;
+        let _ = gravhive::metrics::start_metrics_server("127.0.0.1", port).await;
     });
 
     // Wait 100ms for server to bind

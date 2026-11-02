@@ -19,6 +19,18 @@ pub struct CgroupConfig {
 pub struct CgroupManager;
 
 impl CgroupManager {
+    pub fn sanitize_cgroup_name(name: &str) -> String {
+        let clean: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if clean.is_empty() {
+            "default".to_string()
+        } else {
+            clean
+        }
+    }
+
     pub fn is_cgroups_v2_available() -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -39,7 +51,8 @@ impl CgroupManager {
                 return Ok(());
             }
 
-            let cgroup_path = PathBuf::from(format!("/sys/fs/cgroup/gravhive/{}", app_name));
+            let safe_app_name = Self::sanitize_cgroup_name(app_name);
+            let cgroup_path = PathBuf::from(format!("/sys/fs/cgroup/gravhive/{}", safe_app_name));
             if !cgroup_path.exists() {
                 fs::create_dir_all(&cgroup_path)?;
             }
@@ -125,4 +138,26 @@ pub fn drop_privileges(user_name: Option<&str>, group_name: Option<&str>) -> Res
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_cgroup_name() {
+        assert_eq!(
+            CgroupManager::sanitize_cgroup_name("web-api_1"),
+            "web-api_1"
+        );
+        assert_eq!(
+            CgroupManager::sanitize_cgroup_name("../../system.slice"),
+            "systemslice"
+        );
+        assert_eq!(
+            CgroupManager::sanitize_cgroup_name("../../../etc/passwd"),
+            "etcpasswd"
+        );
+        assert_eq!(CgroupManager::sanitize_cgroup_name("???"), "default");
+    }
 }

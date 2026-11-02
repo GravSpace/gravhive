@@ -18,6 +18,15 @@ pub fn check_and_rotate_file(
         return Ok(false);
     }
 
+    // Security guard: refuse to operate on symbolic links to prevent arbitrary file manipulation
+    let sym_meta = fs::symlink_metadata(file_path)?;
+    if sym_meta.file_type().is_symlink() {
+        anyhow::bail!(
+            "Security violation: refusing to rotate symbolic link at {:?}",
+            file_path
+        );
+    }
+
     let meta = fs::metadata(file_path)?;
     if meta.len() < max_bytes {
         return Ok(false);
@@ -30,6 +39,15 @@ pub fn check_and_rotate_file(
 pub fn rotate_file_now(file_path: &Path, keep: u32, compress: bool) -> Result<bool> {
     if !file_path.exists() {
         return Ok(false);
+    }
+
+    // Security guard: refuse to operate on symbolic links
+    let sym_meta = fs::symlink_metadata(file_path)?;
+    if sym_meta.file_type().is_symlink() {
+        anyhow::bail!(
+            "Security violation: refusing to rotate symbolic link at {:?}",
+            file_path
+        );
     }
 
     let parent = file_path.parent().unwrap_or_else(|| Path::new("."));
@@ -89,6 +107,21 @@ pub fn compress_file_gzip(src: &Path, dst: &Path) -> Result<()> {
     if !src.exists() {
         return Ok(());
     }
+
+    // Security guard: do not compress through symlinks
+    let src_meta = fs::symlink_metadata(src)?;
+    if src_meta.file_type().is_symlink() {
+        anyhow::bail!(
+            "Security violation: refusing to compress symbolic link at {:?}",
+            src
+        );
+    }
+    if let Ok(dst_meta) = fs::symlink_metadata(dst) {
+        if dst_meta.file_type().is_symlink() {
+            let _ = fs::remove_file(dst);
+        }
+    }
+
     let input = File::open(src).with_context(|| format!("Failed to open {:?}", src))?;
     let mut reader = BufReader::new(input);
 
@@ -144,6 +177,38 @@ mod tests {
         let mut decompressed = String::new();
         decoder.read_to_string(&mut decompressed).unwrap();
         assert_eq!(decompressed, data);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_rotation_rejected() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ghive_test_logrotate_symlink_{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let _ = fs::create_dir_all(&temp_dir);
+        let real_file = temp_dir.join("real_target.txt");
+        fs::write(&real_file, "Sensitive target content").unwrap();
+
+        let symlink_path = temp_dir.join("app.log");
+        std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+
+        // Attempting to rotate the symlink must fail with an error
+        let result = check_and_rotate_file(&symlink_path, 10, 3, false);
+        assert!(result.is_err(), "Expected error when rotating symlink");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Security violation"));
+
+        // Target file must remain untouched
+        assert!(real_file.exists());
+        assert_eq!(
+            fs::read_to_string(&real_file).unwrap(),
+            "Sensitive target content"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

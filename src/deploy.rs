@@ -85,6 +85,9 @@ impl DeployManager {
     }
 
     fn execute_local(_env_name: &str, target: &DeployTarget) -> Result<()> {
+        validate_safe_arg(&target.path, "path")?;
+        validate_safe_arg(&target.git_ref, "git_ref")?;
+
         let work_dir = &target.path;
 
         // 1. Pre-deploy hook
@@ -149,6 +152,15 @@ impl DeployManager {
     }
 
     fn execute_remote(_env_name: &str, target: &DeployTarget) -> Result<()> {
+        validate_safe_arg(&target.path, "path")?;
+        validate_safe_arg(&target.git_ref, "git_ref")?;
+        if let Some(ref h) = target.host {
+            validate_safe_arg(h, "host")?;
+        }
+        if let Some(ref u) = target.user {
+            validate_safe_arg(u, "user")?;
+        }
+
         let host = target.host.as_deref().unwrap_or("localhost");
         let user_prefix = if let Some(ref u) = target.user {
             format!("{}@", u)
@@ -192,5 +204,31 @@ impl DeployManager {
         }
 
         Ok(())
+    }
+}
+
+fn validate_safe_arg(val: &str, field_name: &str) -> Result<()> {
+    if val.chars().any(|c| ";|&$`\n\r><\"'\\".contains(c)) {
+        bail!(
+            "Security validation error: deployment field '{}' contains prohibited shell metacharacters: '{}'",
+            field_name,
+            val
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_safe_arg() {
+        assert!(validate_safe_arg("main", "git_ref").is_ok());
+        assert!(validate_safe_arg("/var/www/my-app", "path").is_ok());
+        assert!(validate_safe_arg("v1.2.3", "git_ref").is_ok());
+        assert!(validate_safe_arg("main; rm -rf /", "git_ref").is_err());
+        assert!(validate_safe_arg("app && whoami", "path").is_err());
+        assert!(validate_safe_arg("`touch /tmp/pwn`", "git_ref").is_err());
     }
 }
