@@ -55,8 +55,7 @@ impl CronConfig {
 pub fn resolve_timezone(tz_str: &str) -> Result<chrono_tz::Tz> {
     let trimmed = tz_str.trim();
     if trimmed.eq_ignore_ascii_case("local") || trimmed.eq_ignore_ascii_case("system") {
-        let local_name = iana_time_zone::get_timezone()
-            .unwrap_or_else(|_| "UTC".to_string());
+        let local_name = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
         chrono_tz::Tz::from_str_insensitive(&local_name)
             .or_else(|_| "UTC".parse::<chrono_tz::Tz>())
             .map_err(|e| anyhow::anyhow!("Failed to parse local timezone '{}': {}", local_name, e))
@@ -163,7 +162,10 @@ impl CronManager {
 
     pub fn calculate_next_run(schedule: &Schedule, tz_str: &str) -> Option<DateTime<Utc>> {
         if let Ok(tz) = resolve_timezone(tz_str) {
-            schedule.upcoming(tz).next().map(|dt| dt.with_timezone(&Utc))
+            schedule
+                .upcoming(tz)
+                .next()
+                .map(|dt| dt.with_timezone(&Utc))
         } else {
             schedule.upcoming(Utc).next()
         }
@@ -324,7 +326,8 @@ impl CronManager {
                                 job.runs_count += 1;
                                 job.last_status = "Running".to_string();
                                 let effective_tz = job.timezone.as_deref().unwrap_or(&default_tz);
-                                job.next_run = Self::calculate_next_run(&job.schedule, effective_tz);
+                                job.next_run =
+                                    Self::calculate_next_run(&job.schedule, effective_tz);
 
                                 to_run.push((
                                     job.name.clone(),
@@ -547,9 +550,15 @@ mod tests {
         let cron = CronManager::new_with_timezone(hub, "UTC");
 
         // Job with explicit timezone override
-        cron.add_job("ny-report", "0 0 9 * * *", Some("America/New_York"), "echo", &[])
-            .await
-            .expect("Failed to add NY job");
+        cron.add_job(
+            "ny-report",
+            "0 0 9 * * *",
+            Some("America/New_York"),
+            "echo",
+            &[],
+        )
+        .await
+        .expect("Failed to add NY job");
 
         let jobs = cron.list_jobs().await;
         assert_eq!(jobs[0].timezone, "America/New_York");

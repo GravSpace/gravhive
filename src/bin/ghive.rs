@@ -989,9 +989,7 @@ async fn main() -> Result<()> {
                                 .last_run
                                 .map(|d| {
                                     if let Some(tz) = tz_resolved {
-                                        d.with_timezone(&tz)
-                                            .format("%Y-%m-%d %H:%M:%S")
-                                            .to_string()
+                                        d.with_timezone(&tz).format("%Y-%m-%d %H:%M:%S").to_string()
                                     } else {
                                         d.format("%Y-%m-%d %H:%M:%S").to_string()
                                     }
