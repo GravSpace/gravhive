@@ -35,6 +35,8 @@ pub enum Request {
     CronStop(String),
     CronRestart(String),
     CronDelete(String),
+    CronGetTimezone,
+    CronSetTimezone(String),
     PluginList,
     UpdateAlertConfig(AlertConfig),
     GetAlertConfig,
@@ -74,6 +76,10 @@ pub enum Response {
     },
     CronList {
         jobs: Vec<CronJobInfo>,
+    },
+    CronTimezone {
+        timezone: String,
+        offset: String,
     },
     PluginList {
         plugins: Vec<PluginInfo>,

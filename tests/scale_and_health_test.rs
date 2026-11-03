@@ -28,6 +28,7 @@ async fn test_dynamic_scale_process_manager() {
         out_log: None,
         err_log: None,
         cron: None,
+        cron_timezone: None,
         user: None,
         group: None,
         cgroup_memory_max: None,

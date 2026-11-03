@@ -252,12 +252,12 @@ ghive deploy local
 
 ### 9. Scheduled Background Jobs (`ghive cron`) ⏰
 
-Gravhive memiliki scheduler cron bawaan tanpa membutuhkan crontab OS. Anda dapat membuat cron job dengan 2 cara:
+Gravhive memiliki scheduler cron bawaan tanpa membutuhkan crontab OS, lengkap dengan dukungan zona waktu global dan per-job. Anda dapat membuat cron job dengan 2 cara:
 
 #### Cara 1: Langsung dari CLI (`ghive start --cron`)
 ```bash
-# Menjalankan script backup setiap jam 02:00 pagi
-ghive start "python3 scripts/backup.py" --name "nightly-backup" --cron "0 2 * * *"
+# Menjalankan script backup setiap jam 02:00 pagi (WIB / Asia/Jakarta)
+ghive start "python3 scripts/backup.py" --name "nightly-backup" --cron "0 2 * * *" --cron-timezone "Asia/Jakarta"
 
 # Menjalankan pembersihan cache setiap 5 menit
 ghive start "node clean-cache.js" --name "cache-cleaner" --cron "*/5 * * * *"
@@ -268,10 +268,34 @@ ghive start "curl -s http://localhost:8080/health" --name "health-ping" --cron "
 
 #### Cara 2: Melalui File Konfigurasi (`ghive.toml`)
 ```toml
+# Pengaturan Zona Waktu Global untuk Scheduler Cron (opsional)
+[cron]
+timezone = "Asia/Jakarta"            # IANA timezone (misal: "Asia/Jakarta", "America/New_York", "UTC", "local")
+
 [app.nightly-backup]
 script = "python3 scripts/backup.py"
 cron = "0 2 * * *"                  # Berjalan otomatis setiap jam 02:00 pagi
+cron_timezone = "Asia/Jakarta"      # Override zona waktu spesifik untuk job ini (opsional)
 ```
+
+#### Mengatur & Melihat Zona Waktu Cron (`set-timezone` / `timezone`):
+```bash
+# Melihat zona waktu cron saat ini
+ghive cron timezone
+# alias cepat:
+ghive cron tz
+
+# Mengubah zona waktu default scheduler cron ke Asia/Jakarta (WIB / UTC+7)
+ghive cron set-timezone Asia/Jakarta
+# alias:
+ghive cron set-tz Asia/Jakarta
+# atau:
+ghive cron timezone Asia/Jakarta
+
+# Mengatur zona waktu mengikuti zona waktu sistem host lokal secara dinamis
+ghive cron set-timezone local
+```
+> **Catatan:** Mengubah zona waktu secara dinamis akan langsung menghitung ulang jadwal eksekusi berikutnya (*next run*) untuk semua cron job yang menggunakan zona waktu default, dan menyimpannya secara persisten ke `~/.gravhive/cron.json`.
 
 #### Melihat Status & Riwayat Eksekusi Cron:
 ```bash
@@ -280,7 +304,7 @@ ghive cron
 # atau
 ghive cron list
 ```
-Output menampilkan nama job, jadwal ekspresi, jadwal eksekusi berikutnya (*next run*), waktu eksekusi terakhir (*last run*), jumlah eksekusi (*runs count*), dan status (*Scheduled*, *Running*, *Stopped*, atau *Success* / *Failed*).
+Output menampilkan nama job, jadwal ekspresi, zona waktu (*timezone*), perintah (*command*), jadwal eksekusi berikutnya (*next run* sesuai zona waktu), waktu eksekusi terakhir (*last run*), jumlah eksekusi (*runs count*), dan status (*Scheduled*, *Running*, *Stopped*, atau *Success* / *Failed*).
 
 #### Menghentikan (Pause) & Melanjutkan Cron Job:
 ```bash

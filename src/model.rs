@@ -109,6 +109,8 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub cron: Option<String>,
     #[serde(default)]
+    pub cron_timezone: Option<String>,
+    #[serde(default)]
     pub user: Option<String>,
     #[serde(default)]
     pub group: Option<String>,

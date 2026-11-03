@@ -30,6 +30,7 @@ impl Doctor {
         // 2. Security & Vault Checks
         items.push(Self::check_master_key());
         items.push(Self::check_alerts_config());
+        items.push(Self::check_cron_config());
 
         // 3. System Resources & Kernel Checks
         items.extend(Self::check_system_resources());
@@ -163,6 +164,62 @@ impl Doctor {
                 name: "Webhook Configuration".to_string(),
                 status: DiagnosticStatus::Pass,
                 message: "No global webhooks configured (optional). Run `ghive webhook set <URL>` to add one.".to_string(),
+                recommendation: None,
+            }
+        }
+    }
+
+    fn check_cron_config() -> DiagnosticItem {
+        let path = crate::common::cron_config_path();
+        if path.exists() {
+            match crate::cron::CronConfig::load_global() {
+                Ok(Some(cfg)) => {
+                    if let Ok(tz) = crate::cron::resolve_timezone(&cfg.timezone) {
+                        DiagnosticItem {
+                            category: "Scheduler".to_string(),
+                            name: "Cron Timezone Configuration".to_string(),
+                            status: DiagnosticStatus::Pass,
+                            message: format!(
+                                "Configured timezone: {} (valid IANA timezone)",
+                                tz.name()
+                            ),
+                            recommendation: None,
+                        }
+                    } else {
+                        DiagnosticItem {
+                            category: "Scheduler".to_string(),
+                            name: "Cron Timezone Configuration".to_string(),
+                            status: DiagnosticStatus::Warn,
+                            message: format!(
+                                "Configured timezone '{}' in {} is invalid",
+                                cfg.timezone,
+                                path.display()
+                            ),
+                            recommendation: Some(
+                                "Run `ghive cron set-timezone <TIMEZONE>` to update.".to_string(),
+                            ),
+                        }
+                    }
+                }
+                _ => DiagnosticItem {
+                    category: "Scheduler".to_string(),
+                    name: "Cron Timezone Configuration".to_string(),
+                    status: DiagnosticStatus::Warn,
+                    message: format!("Failed to read cron config from {}", path.display()),
+                    recommendation: Some(
+                        "Check file permissions or run `ghive cron set-timezone <TIMEZONE>`."
+                            .to_string(),
+                    ),
+                },
+            }
+        } else {
+            DiagnosticItem {
+                category: "Scheduler".to_string(),
+                name: "Cron Timezone Configuration".to_string(),
+                status: DiagnosticStatus::Pass,
+                message:
+                    "Defaulting to UTC timezone. Run `ghive cron set-timezone <TIMEZONE>` to customize."
+                        .to_string(),
                 recommendation: None,
             }
         }

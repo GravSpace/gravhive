@@ -62,7 +62,23 @@ async fn main() -> Result<()> {
     }
 
     // Initialize Cron Engine
-    let cron_manager = CronManager::new(log_hub.clone());
+    let mut cron_timezone = "UTC".to_string();
+    if let Ok(Some(saved_cron_config)) = gravhive::cron::CronConfig::load_global() {
+        info!(
+            "Loaded cron configuration from ~/.gravhive/cron.json (timezone: {})",
+            saved_cron_config.timezone
+        );
+        cron_timezone = saved_cron_config.timezone;
+    }
+    if Path::new("ghive.toml").exists() {
+        if let Some(eco_tz) =
+            gravhive::config::load_cron_config_from_ecosystem(Path::new("ghive.toml"))
+        {
+            info!("Loaded cron timezone '{}' from ghive.toml", eco_tz);
+            cron_timezone = eco_tz;
+        }
+    }
+    let cron_manager = CronManager::new_with_timezone(log_hub.clone(), &cron_timezone);
     cron_manager.clone().start_loop();
 
     // Initialize Socket Activation Manager

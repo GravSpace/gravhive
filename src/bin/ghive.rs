@@ -94,6 +94,10 @@ enum Commands {
         /// Scheduled cron expression (e.g. "0 */5 * * * *" or "0 2 * * *")
         #[arg(long)]
         cron: Option<String>,
+
+        /// Timezone for scheduled cron expression (e.g. "Asia/Jakarta", "UTC", "America/New_York", or "local")
+        #[arg(long)]
+        cron_timezone: Option<String>,
     },
 
     /// Run an application directly in foreground mode (ideal for Docker containers as PID 1)
@@ -144,6 +148,10 @@ enum Commands {
         /// Scheduled cron expression (e.g. "0 */5 * * * *" or "0 2 * * *")
         #[arg(long)]
         cron: Option<String>,
+
+        /// Timezone for scheduled cron expression (e.g. "Asia/Jakarta", "UTC", "America/New_York", or "local")
+        #[arg(long)]
+        cron_timezone: Option<String>,
     },
 
     /// Stop an application by ID, Name, or 'all'
@@ -460,6 +468,20 @@ pub enum CronAction {
     /// List all scheduled cron jobs (default)
     #[command(alias = "ls")]
     List,
+
+    /// View or get current cron timezone setting
+    #[command(alias = "tz")]
+    Timezone {
+        /// Optional timezone to set (e.g. 'Asia/Jakarta', 'UTC', 'America/New_York', 'local')
+        timezone: Option<String>,
+    },
+
+    /// Set timezone for cron scheduling (e.g. 'Asia/Jakarta', 'UTC', 'America/New_York', 'local')
+    #[command(alias = "set-tz")]
+    SetTimezone {
+        /// Timezone identifier (e.g. 'Asia/Jakarta', 'UTC', 'America/New_York', 'local')
+        timezone: String,
+    },
 
     /// Stop/pause a scheduled cron job
     Stop {
@@ -863,6 +885,7 @@ async fn main() -> Result<()> {
             no_autorestart,
             args,
             cron,
+            cron_timezone,
         } => {
             let configs = prepare_process_configs(
                 &target,
@@ -877,6 +900,7 @@ async fn main() -> Result<()> {
                 no_autorestart,
                 args,
                 cron,
+                cron_timezone,
             )?;
             run_foreground(configs).await?;
             return Ok(());
@@ -895,6 +919,7 @@ async fn main() -> Result<()> {
             no_autorestart,
             ref args,
             ref cron,
+            ref cron_timezone,
         } if no_daemon => {
             let configs = prepare_process_configs(
                 target,
@@ -909,6 +934,7 @@ async fn main() -> Result<()> {
                 no_autorestart,
                 args.clone(),
                 cron.clone(),
+                cron_timezone.clone(),
             )?;
             run_foreground(configs).await?;
             return Ok(());
@@ -934,6 +960,7 @@ async fn main() -> Result<()> {
                             .set_header(vec![
                                 Cell::new("name").fg(TableColor::Cyan),
                                 Cell::new("schedule").fg(TableColor::Cyan),
+                                Cell::new("timezone").fg(TableColor::Cyan),
                                 Cell::new("command").fg(TableColor::Cyan),
                                 Cell::new("next run").fg(TableColor::Cyan),
                                 Cell::new("last run").fg(TableColor::Cyan),
@@ -942,16 +969,33 @@ async fn main() -> Result<()> {
                             ]);
 
                         for j in jobs {
+                            let tz_resolved = gravhive::cron::resolve_timezone(&j.timezone).ok();
                             let next_str = if j.paused {
                                 "Paused".to_string()
                             } else {
                                 j.next_run
-                                    .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                                    .map(|d| {
+                                        if let Some(tz) = tz_resolved {
+                                            d.with_timezone(&tz)
+                                                .format("%Y-%m-%d %H:%M:%S")
+                                                .to_string()
+                                        } else {
+                                            d.format("%Y-%m-%d %H:%M:%S").to_string()
+                                        }
+                                    })
                                     .unwrap_or("-".into())
                             };
                             let last_str = j
                                 .last_run
-                                .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                                .map(|d| {
+                                    if let Some(tz) = tz_resolved {
+                                        d.with_timezone(&tz)
+                                            .format("%Y-%m-%d %H:%M:%S")
+                                            .to_string()
+                                    } else {
+                                        d.format("%Y-%m-%d %H:%M:%S").to_string()
+                                    }
+                                })
                                 .unwrap_or("-".into());
 
                             let status_cell = if j.paused || j.last_status == "Stopped" {
@@ -969,6 +1013,7 @@ async fn main() -> Result<()> {
                             table.add_row(vec![
                                 Cell::new(j.name),
                                 Cell::new(j.expression),
+                                Cell::new(j.timezone).fg(TableColor::DarkGrey),
                                 Cell::new(j.command),
                                 Cell::new(next_str),
                                 Cell::new(last_str),
@@ -979,6 +1024,34 @@ async fn main() -> Result<()> {
                         println!("\n{}\n", table);
                     }
                 }
+            }
+            CronAction::Timezone { timezone } => {
+                if let Some(tz) = timezone {
+                    let resp = IpcClient::send_request(Request::CronSetTimezone(tz)).await?;
+                    print_response(resp);
+                } else {
+                    let resp = IpcClient::send_request(Request::CronGetTimezone).await?;
+                    match resp {
+                        Response::CronTimezone { timezone, offset } => {
+                            println!(
+                                "\n  {} Current cron timezone: {} ({})",
+                                "⏰".cyan(),
+                                timezone.bold(),
+                                offset
+                            );
+                            println!(
+                                "     To change: {} {}\n",
+                                "ghive cron set-timezone".cyan(),
+                                "<TIMEZONE>".dimmed()
+                            );
+                        }
+                        other => print_response(other),
+                    }
+                }
+            }
+            CronAction::SetTimezone { timezone } => {
+                let resp = IpcClient::send_request(Request::CronSetTimezone(timezone)).await?;
+                print_response(resp);
             }
             CronAction::Stop { name } => {
                 let resp = IpcClient::send_request(Request::CronStop(name)).await?;
@@ -1035,6 +1108,7 @@ async fn main() -> Result<()> {
             no_autorestart,
             args,
             cron,
+            cron_timezone,
         } => {
             let is_cron = cron.is_some();
             let configs = prepare_process_configs(
@@ -1050,6 +1124,7 @@ async fn main() -> Result<()> {
                 no_autorestart,
                 args,
                 cron,
+                cron_timezone,
             )?;
 
             for cfg in configs {
@@ -1523,6 +1598,7 @@ fn prepare_process_configs(
     no_autorestart: bool,
     args: Vec<String>,
     cron: Option<String>,
+    cron_timezone: Option<String>,
 ) -> Result<Vec<ProcessConfig>> {
     let target_path = Path::new(target);
 
@@ -1650,6 +1726,7 @@ fn prepare_process_configs(
         out_log: None,
         err_log: None,
         cron,
+        cron_timezone,
         user: None,
         group: None,
         cgroup_memory_max: None,

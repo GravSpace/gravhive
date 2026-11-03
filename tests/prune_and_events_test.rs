@@ -49,6 +49,7 @@ async fn test_process_manager_prune_stopped_and_errored() {
         out_log: None,
         err_log: None,
         cron: None,
+        cron_timezone: None,
         user: None,
         group: None,
         cgroup_memory_max: None,

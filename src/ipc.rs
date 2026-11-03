@@ -151,7 +151,13 @@ async fn handle_client(
                 if let Some(ref expr) = config.cron {
                     if let Some(ref cron) = cron_manager {
                         match cron
-                            .add_job(&app_name, expr, &config.script, &config.args)
+                            .add_job(
+                                &app_name,
+                                expr,
+                                config.cron_timezone.as_deref(),
+                                &config.script,
+                                &config.args,
+                            )
                             .await
                         {
                             Ok(()) => {
@@ -546,6 +552,47 @@ async fn handle_client(
                         Err(e) => {
                             let resp = Response::Error {
                                 message: format!("Failed to delete cron job '{}': {}", name, e),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
+                    }
+                } else {
+                    let resp = Response::Error {
+                        message: "Cron manager is not active in this daemon".to_string(),
+                    };
+                    writer.send(serde_json::to_string(&resp)?).await?;
+                }
+            }
+            Request::CronGetTimezone => {
+                if let Some(ref cron) = cron_manager {
+                    let (tz, offset) = cron.get_timezone().await;
+                    let resp = Response::CronTimezone {
+                        timezone: tz,
+                        offset,
+                    };
+                    writer.send(serde_json::to_string(&resp)?).await?;
+                } else {
+                    let resp = Response::Error {
+                        message: "Cron manager is not active in this daemon".to_string(),
+                    };
+                    writer.send(serde_json::to_string(&resp)?).await?;
+                }
+            }
+            Request::CronSetTimezone(tz) => {
+                if let Some(ref cron) = cron_manager {
+                    match cron.set_default_timezone(&tz).await {
+                        Ok((canonical_tz, offset)) => {
+                            let resp = Response::Ok {
+                                message: format!(
+                                    "Cron timezone updated to '{}' ({})",
+                                    canonical_tz, offset
+                                ),
+                            };
+                            writer.send(serde_json::to_string(&resp)?).await?;
+                        }
+                        Err(e) => {
+                            let resp = Response::Error {
+                                message: format!("Failed to set cron timezone: {}", e),
                             };
                             writer.send(serde_json::to_string(&resp)?).await?;
                         }

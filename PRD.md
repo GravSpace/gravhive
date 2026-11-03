@@ -327,6 +327,7 @@ max_restarts = 10
 | **`ghive scale <app> <n\|+n\|-n>`** | - | Menambah atau mengurangi jumlah worker instance aplikasi secara dinamis saat runtime tanpa menghentikan aplikasi. |
 | **`ghive logrotate [id\|name\|all]`** | - | Memutar (*rotate*) berkas log stdout/stderr dan mengompresi arsip lama menjadi `.gz` secara manual on-demand. |
 | **`ghive webhook`** / **`ghive alert`** | `set <url> [--type <t>] [--username <u>] [--channel <c>] [--chat-id <id>] [-H <k:v>]`, `list [--show-full]`, `test [-m <msg>]`, `delete <provider\|all>` | Mengelola endpoint webhook pemberitahuan (Discord, Slack, Telegram, Custom HTTP) secara persisten di `~/.gravhive/alerts.json` dan sinkron live via IPC ke daemon `ghived`. |
+| **`ghive cron`** | `list`, `timezone [tz]`, `set-timezone <tz>`, `stop <name\|all>`, `restart <name\|all>`, `delete <name\|all>` | Mengelola scheduled background jobs, melihat jadwal eksekusi, serta menyetel dan melihat konfigurasi zona waktu (IANA timezone atau `local`). |
 | **`ghive metrics`** | `-p, --port <port>` (default: 9615) | Menjalankan HTTP server Prometheus / OpenMetrics exporter bawaan untuk scraping metrik performa oleh Grafana/Prometheus (termasuk kompatibilitas metrik `pm2_*`). |
 
 ---

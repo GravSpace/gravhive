@@ -17,6 +17,13 @@ pub struct EcosystemConfig {
     pub alerts: Option<AlertConfig>,
     #[serde(default)]
     pub deploy: HashMap<String, DeployTarget>,
+    #[serde(default)]
+    pub cron: Option<CronEcosystemConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CronEcosystemConfig {
+    pub timezone: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +47,7 @@ pub struct SingleAppConfig {
     pub interpreter: Option<String>,
     pub log: Option<LogConfig>,
     pub cron: Option<String>,
+    pub cron_timezone: Option<String>,
     pub user: Option<String>,
     pub group: Option<String>,
     pub cgroup_memory_max: Option<String>,
@@ -179,6 +187,7 @@ fn convert_single_app(single: SingleAppConfig, base_dir: Option<&Path>) -> Resul
         out_log,
         err_log,
         cron: single.cron,
+        cron_timezone: single.cron_timezone,
         user: single.user,
         group: single.group,
         cgroup_memory_max,
@@ -218,6 +227,19 @@ pub fn load_ecosystem(
     let deploy = eco.deploy.clone();
     let configs = convert_ecosystem_to_configs(eco, path.parent())?;
     Ok((configs, alerts, deploy))
+}
+
+pub fn load_cron_config_from_ecosystem(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let eco_opt: Option<EcosystemConfig> = match ext.to_lowercase().as_str() {
+        "json" => serde_json::from_str(&content).ok(),
+        "yaml" | "yml" => serde_json::from_str(&content)
+            .ok()
+            .or_else(|| toml::from_str(&content).ok()),
+        _ => toml::from_str(&content).ok(),
+    };
+    eco_opt.and_then(|eco| eco.cron.and_then(|c| c.timezone))
 }
 
 pub fn generate_ecosystem_template(format: &str) -> &'static str {

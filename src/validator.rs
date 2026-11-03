@@ -92,6 +92,15 @@ impl ConfigValidator {
             return report;
         }
 
+        if let Some(eco_tz) = crate::config::load_cron_config_from_ecosystem(path) {
+            if let Err(e) = crate::cron::resolve_timezone(&eco_tz) {
+                report.errors.push(format!(
+                    "[cron] Invalid global cron timezone '{}': {}",
+                    eco_tz, e
+                ));
+            }
+        }
+
         let mut bound_ports: HashMap<u16, String> = HashMap::new();
 
         for config in configs {
@@ -157,6 +166,16 @@ impl ConfigValidator {
                             app_name, cron_expr, e
                         ));
                     }
+                }
+            }
+
+            // 3b. Cron timezone check
+            if let Some(ref tz_str) = config.cron_timezone {
+                if let Err(e) = crate::cron::resolve_timezone(tz_str) {
+                    report.errors.push(format!(
+                        "[app.{}] Invalid cron timezone '{}': {}",
+                        app_name, tz_str, e
+                    ));
                 }
             }
 
@@ -270,5 +289,27 @@ cron = "invalid cron expression"
             .errors
             .iter()
             .any(|e| e.contains("Invalid cron expression")));
+    }
+
+    #[test]
+    fn test_validate_bad_cron_timezone() {
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(format!("test_bad_tz_{}.toml", std::process::id()));
+        let content = r#"
+[app.app1]
+script = "echo"
+cron = "0 2 * * *"
+cron_timezone = "Invalid/Timezone"
+"#;
+        std::fs::write(&path, content).unwrap();
+
+        let report = ConfigValidator::validate_file(&path);
+        let _ = std::fs::remove_file(path);
+
+        assert!(!report.is_valid());
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("Invalid cron timezone 'Invalid/Timezone'")));
     }
 }

@@ -33,6 +33,8 @@ crossterm = "0.28"
 nix = { version = "0.29", features = ["signal", "process", "user", "resource"] }
 libc = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = { version = "0.10", features = ["serde", "case-insensitive"] }
+iana-time-zone = "0.1"
 anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
