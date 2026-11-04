@@ -1,4 +1,5 @@
 pub mod alerts;
+pub mod cluster_proxy;
 pub mod common;
 pub mod config;
 pub mod cron;

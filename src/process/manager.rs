@@ -17,6 +17,7 @@ pub struct ProcessManager {
     log_hub: LogHub,
     alert_manager: Option<AlertManager>,
     event_journal: EventJournal,
+    cluster_balancers: HashMap<String, std::sync::Arc<crate::cluster_proxy::ClusterLoadBalancer>>,
 }
 
 impl ProcessManager {
@@ -28,6 +29,7 @@ impl ProcessManager {
             log_hub,
             alert_manager: None,
             event_journal: EventJournal::default(),
+            cluster_balancers: HashMap::new(),
         }
     }
 
@@ -41,6 +43,25 @@ impl ProcessManager {
 
     pub fn event_journal(&self) -> &EventJournal {
         &self.event_journal
+    }
+
+    pub fn get_cluster_balancer(
+        &self,
+        app_name: &str,
+    ) -> Option<std::sync::Arc<crate::cluster_proxy::ClusterLoadBalancer>> {
+        self.cluster_balancers.get(app_name).cloned()
+    }
+
+    pub async fn update_cluster_proxy_upstreams(&self, app_name: &str) {
+        if let Some(balancer) = self.cluster_balancers.get(app_name) {
+            let current_ports: Vec<u16> = self
+                .workers
+                .iter()
+                .filter(|w| w.app_name == app_name && w.status == ProcessStatus::Online)
+                .filter_map(|w| w.config.target_port)
+                .collect();
+            balancer.update_upstreams(current_ports).await;
+        }
     }
 
     pub async fn start_app(&mut self, mut config: ProcessConfig) -> Result<Vec<u32>> {
@@ -76,19 +97,31 @@ impl ProcessManager {
 
         self.apps.insert(app_name.clone(), config.clone());
 
+        let cluster_proxy_enabled = config.exec_mode == ExecMode::Cluster
+            && config.listen_port.is_some()
+            && config.cluster_proxy.unwrap_or(true);
+
+        let mut upstream_ports = Vec::new();
+        let base_port = config
+            .internal_port_base
+            .or_else(|| config.listen_port.map(|p| p + 1))
+            .unwrap_or(8081);
+
         let mut started_ids = Vec::new();
 
         for i in 0..instances {
             let id = self.next_id;
             self.next_id += 1;
 
-            let mut worker = Worker::new(
-                id,
-                app_name.clone(),
-                i,
-                config.clone(),
-                self.log_hub.clone(),
-            );
+            let mut worker_config = config.clone();
+            if cluster_proxy_enabled {
+                let worker_port = base_port + (i as u16);
+                worker_config.target_port = Some(worker_port);
+                upstream_ports.push(worker_port);
+            }
+
+            let mut worker =
+                Worker::new(id, app_name.clone(), i, worker_config, self.log_hub.clone());
 
             if let Err(e) = worker.spawn().await {
                 error!(
@@ -113,6 +146,29 @@ impl ProcessManager {
             }
 
             self.workers.push(worker);
+        }
+
+        if cluster_proxy_enabled {
+            if let Some(public_port) = config.listen_port {
+                match crate::cluster_proxy::ClusterLoadBalancer::start(
+                    app_name.clone(),
+                    public_port,
+                    upstream_ports,
+                )
+                .await
+                {
+                    Ok(balancer) => {
+                        self.cluster_balancers
+                            .insert(app_name.clone(), std::sync::Arc::new(balancer));
+                    }
+                    Err(e) => {
+                        warn!(
+                            "[CLUSTER-PROXY] Failed to start L4 load balancer for app '{}': {}",
+                            app_name, e
+                        );
+                    }
+                }
+            }
         }
 
         Ok(started_ids)
@@ -264,6 +320,7 @@ impl ProcessManager {
             );
 
             self.workers.push(new_worker);
+            self.update_cluster_proxy_upstreams(&app_name).await;
             reloaded_count += 1;
         }
 
@@ -347,6 +404,7 @@ impl ProcessManager {
 
         config.instances = target_count;
         self.apps.insert(app_name.to_string(), config);
+        self.update_cluster_proxy_upstreams(app_name).await;
 
         self.event_journal.record_event(
             app_name,
@@ -387,9 +445,15 @@ impl ProcessManager {
         // Also identify apps to remove if deleting by name or all
         match target {
             TargetSelector::All => {
+                for (_, balancer) in self.cluster_balancers.drain() {
+                    balancer.shutdown();
+                }
                 self.apps.clear();
             }
             TargetSelector::Name(name) => {
+                if let Some(balancer) = self.cluster_balancers.remove(name) {
+                    balancer.shutdown();
+                }
                 self.apps.remove(name);
             }
             TargetSelector::Id(_) => {}

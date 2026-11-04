@@ -1278,8 +1278,11 @@ async fn main() -> Result<()> {
                     if !config.env.is_empty() {
                         println!("\n  Environment Variables:");
                         for (k, v) in &config.env {
-                            let masked_val =
-                                gravhive::vault::mask_sensitive_text(v, &secret_values);
+                            let masked_val = if v.starts_with("vault:") {
+                                "[VAULT:***]".to_string()
+                            } else {
+                                gravhive::vault::mask_sensitive_text(v, &secret_values)
+                            };
                             println!("    {} = {}", k.dimmed(), masked_val);
                         }
                     }
@@ -1732,6 +1735,8 @@ fn prepare_process_configs(
         cgroup_pids_max: None,
         listen_port: None,
         target_port: None,
+        cluster_proxy: None,
+        internal_port_base: None,
         idle_timeout_secs: None,
         log_rotate_max_size: None,
         log_rotate_keep: None,
@@ -1743,6 +1748,8 @@ fn prepare_process_configs(
 }
 
 async fn run_foreground(configs: Vec<ProcessConfig>) -> Result<()> {
+    gravhive::process::setup_subreaper();
+
     println!(
         "{} GravHive container runtime starting in foreground (PID: {})...",
         "●".cyan().bold(),
@@ -1798,6 +1805,7 @@ async fn run_foreground(configs: Vec<ProcessConfig>) -> Result<()> {
         let mut interval = tokio::time::interval(Duration::from_millis(1000));
         loop {
             interval.tick().await;
+            gravhive::process::reap_zombies();
             let mut mgr = mgr_health.write().await;
             mgr.check_health_and_restart().await;
         }

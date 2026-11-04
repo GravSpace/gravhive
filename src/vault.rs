@@ -205,6 +205,43 @@ impl SecretVault {
         let text = String::from_utf8(decrypted)?;
         Ok(text)
     }
+
+    /// Resolves a value that might reference a vault secret via the `vault:<SECRET_NAME>` syntax.
+    /// If the value does not start with `vault:`, it is returned unchanged.
+    pub fn resolve_secret_value(val: &str) -> Result<String> {
+        if let Some(key_name) = val.strip_prefix("vault:") {
+            let key_trimmed = key_name.trim();
+            match Self::get_secret(key_trimmed)? {
+                Some(secret) => Ok(secret),
+                None => bail!(
+                    "Secret key '{}' referenced as 'vault:{}' was not found in vault",
+                    key_trimmed,
+                    key_trimmed
+                ),
+            }
+        } else {
+            Ok(val.to_string())
+        }
+    }
+}
+
+pub fn mask_env_map(env: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut masked = HashMap::new();
+    for (k, v) in env {
+        let is_sensitive_key = k.to_uppercase().contains("PASS")
+            || k.to_uppercase().contains("SECRET")
+            || k.to_uppercase().contains("KEY")
+            || k.to_uppercase().contains("TOKEN")
+            || k.to_uppercase().contains("AUTH");
+        if v.starts_with("vault:") {
+            masked.insert(k.clone(), "[VAULT:***]".to_string());
+        } else if is_sensitive_key {
+            masked.insert(k.clone(), mask_secret_value(v));
+        } else {
+            masked.insert(k.clone(), v.clone());
+        }
+    }
+    masked
 }
 
 pub fn mask_secret_value(val: &str) -> String {

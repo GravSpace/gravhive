@@ -57,6 +57,8 @@ async fn test_process_manager_prune_stopped_and_errored() {
         cgroup_pids_max: None,
         listen_port: None,
         target_port: None,
+        cluster_proxy: None,
+        internal_port_base: None,
         idle_timeout_secs: None,
         log_rotate_max_size: None,
         log_rotate_keep: None,

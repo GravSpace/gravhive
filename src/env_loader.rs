@@ -66,6 +66,16 @@ pub fn load_env_file(path: &Path) -> Result<HashMap<String, String>> {
     Ok(parse_env_str(&content))
 }
 
+/// Resolves all `vault:KEY` references in the given environment map using `SecretVault`.
+pub fn resolve_env_vault_references(env_map: &mut HashMap<String, String>) -> Result<()> {
+    for val in env_map.values_mut() {
+        if val.starts_with("vault:") {
+            *val = crate::vault::SecretVault::resolve_secret_value(val)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

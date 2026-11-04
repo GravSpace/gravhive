@@ -34,6 +34,9 @@ async fn main() -> Result<()> {
         gravhive::common::VERSION
     );
 
+    // Setup subreaper for container & background zombie reaping
+    gravhive::process::setup_subreaper();
+
     ensure_dirs().context("Failed to initialize Gravhive directories")?;
 
     // Write daemon PID
@@ -94,6 +97,15 @@ async fn main() -> Result<()> {
     let watchdog = Watchdog::new(manager.clone(), 3, Some(alert_manager.clone()));
     tokio::spawn(async move {
         watchdog.run_loop().await;
+    });
+
+    // Spawn Zombie Process Reaper Loop
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            ticker.tick().await;
+            gravhive::process::reap_zombies();
+        }
     });
 
     // Handle OS shutdown signals (SIGINT, SIGTERM)

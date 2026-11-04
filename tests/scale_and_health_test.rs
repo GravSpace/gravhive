@@ -36,6 +36,8 @@ async fn test_dynamic_scale_process_manager() {
         cgroup_pids_max: None,
         listen_port: None,
         target_port: None,
+        cluster_proxy: None,
+        internal_port_base: None,
         idle_timeout_secs: None,
         log_rotate_max_size: None,
         log_rotate_keep: None,

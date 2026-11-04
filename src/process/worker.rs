@@ -98,9 +98,23 @@ impl Worker {
             cmd.env("GHIVE_CLUSTER", "1");
         }
 
-        // User custom env variables
+        // User custom env variables (with automatic vault:KEY resolution)
         for (k, v) in &self.config.env {
-            cmd.env(k, v);
+            let resolved_val = if v.starts_with("vault:") {
+                match crate::vault::SecretVault::resolve_secret_value(v) {
+                    Ok(sec) => sec,
+                    Err(e) => {
+                        warn!(
+                            "[app: {}] Worker #{} failed to resolve vault secret for env '{}': {}",
+                            self.app_name, self.id, k, e
+                        );
+                        v.clone()
+                    }
+                }
+            } else {
+                v.clone()
+            };
+            cmd.env(k, resolved_val);
         }
 
         if let Some(tp) = self.config.target_port {

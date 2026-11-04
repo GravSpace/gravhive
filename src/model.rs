@@ -125,6 +125,10 @@ pub struct ProcessConfig {
     #[serde(default)]
     pub target_port: Option<u16>,
     #[serde(default)]
+    pub cluster_proxy: Option<bool>,
+    #[serde(default)]
+    pub internal_port_base: Option<u16>,
+    #[serde(default)]
     pub idle_timeout_secs: Option<u64>,
     #[serde(default)]
     pub log_rotate_max_size: Option<u64>,
