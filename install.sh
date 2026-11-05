@@ -91,13 +91,16 @@ check_environment() {
 
     case "$ARCH" in
         x86_64|amd64)
-            TARGET_ARCH="x86_64-unknown-linux-gnu"
+            TARGET_ARCH="x86_64-unknown-linux-musl"
+            ALT_TARGET_ARCH="x86_64-unknown-linux-gnu"
             ;;
         aarch64|arm64)
-            TARGET_ARCH="aarch64-unknown-linux-gnu"
+            TARGET_ARCH="aarch64-unknown-linux-musl"
+            ALT_TARGET_ARCH="aarch64-unknown-linux-gnu"
             ;;
         *)
             TARGET_ARCH="generic"
+            ALT_TARGET_ARCH="generic"
             log_warn "Architecture ${ARCH} will require building from source."
             ;;
     esac
@@ -124,7 +127,17 @@ build_or_copy_binaries() {
         log_info "Found existing release binaries in target/release/"
         SRC_GHIVE="${SCRIPT_DIR}/target/release/ghive"
         SRC_GHIVED="${SCRIPT_DIR}/target/release/ghived"
-    # 3. Build from source using Cargo
+    # 3. Check if target/<TARGET_ARCH>/release exists (static musl binary)
+    elif [ -f "${SCRIPT_DIR}/target/${TARGET_ARCH}/release/ghive" ] && [ -f "${SCRIPT_DIR}/target/${TARGET_ARCH}/release/ghived" ]; then
+        log_info "Found static release binaries in target/${TARGET_ARCH}/release/"
+        SRC_GHIVE="${SCRIPT_DIR}/target/${TARGET_ARCH}/release/ghive"
+        SRC_GHIVED="${SCRIPT_DIR}/target/${TARGET_ARCH}/release/ghived"
+    # 4. Check if target/<ALT_TARGET_ARCH>/release exists (gnu binary)
+    elif [ -f "${SCRIPT_DIR}/target/${ALT_TARGET_ARCH}/release/ghive" ] && [ -f "${SCRIPT_DIR}/target/${ALT_TARGET_ARCH}/release/ghived" ]; then
+        log_info "Found release binaries in target/${ALT_TARGET_ARCH}/release/"
+        SRC_GHIVE="${SCRIPT_DIR}/target/${ALT_TARGET_ARCH}/release/ghive"
+        SRC_GHIVED="${SCRIPT_DIR}/target/${ALT_TARGET_ARCH}/release/ghived"
+    # 5. Build from source using Cargo
     elif [ -f "${SCRIPT_DIR}/Cargo.toml" ]; then
         log_info "Building Gravhive from local source using Cargo (release mode)..."
         if ! command -v cargo >/dev/null 2>&1; then

@@ -34,8 +34,8 @@ impl Upgrader {
         let arch = std::env::consts::ARCH;
 
         match (os, arch) {
-            ("linux", "x86_64") => Ok("x86_64-unknown-linux-gnu"),
-            ("linux", "aarch64") => Ok("aarch64-unknown-linux-gnu"),
+            ("linux", "x86_64") => Ok("x86_64-unknown-linux-musl"),
+            ("linux", "aarch64") => Ok("aarch64-unknown-linux-musl"),
             ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
             ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
             _ => bail!(
@@ -164,12 +164,25 @@ impl Upgrader {
             return Ok(());
         }
 
-        // Find appropriate tarball asset
+        // Find appropriate tarball asset (matches musl first for static compatibility, falls back to gnu)
         let expected_asset_suffix = format!("{}.tar.gz", current_target);
+        let fallback_suffix = if current_target.contains("musl") {
+            Some(format!("{}.tar.gz", current_target.replace("musl", "gnu")))
+        } else if current_target.contains("gnu") {
+            Some(format!("{}.tar.gz", current_target.replace("gnu", "musl")))
+        } else {
+            None
+        };
+
         let asset = release
             .assets
             .iter()
             .find(|a| a.name.ends_with(&expected_asset_suffix))
+            .or_else(|| {
+                fallback_suffix
+                    .as_ref()
+                    .and_then(|suffix| release.assets.iter().find(|a| a.name.ends_with(suffix)))
+            })
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "No matching release asset found for target '{}' in release '{}'. Available assets: {:?}",

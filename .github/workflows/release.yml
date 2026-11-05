@@ -17,14 +17,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Statically linked musl binaries (Universal compatibility: Ubuntu 18.04+, Debian, Alpine, CentOS, RHEL, etc. - Zero GLIBC dependency)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+
+          # Dynamically linked GNU binaries (built with cross for maximum backward compatibility with older GLIBC)
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            use_cross: false
+            use_cross: true
 
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
 
+          # macOS binaries (Apple Silicon and Intel)
           - target: aarch64-apple-darwin
             os: macos-latest
             use_cross: false
@@ -49,7 +60,7 @@ jobs:
 
       - name: Install Cross (if cross-compiling)
         if: ${{ matrix.use_cross }}
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        uses: taiki-e/install-action@cross
 
       - name: Build Release Binary
         run: |
