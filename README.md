@@ -216,6 +216,10 @@ ghive logs api-gateway -f
 # Hanya menampilkan log error
 ghive logs api-gateway --err
 
+# Melihat dan live stream log untuk scheduled cron job
+ghive logs cron
+ghive logs cron:nightly-backup -f
+
 # Putar log dan kompresi gzip (.gz) secara manual on-demand
 ghive logrotate api-gateway
 ghive logrotate all
@@ -331,10 +335,39 @@ ghive cron delete all
 ```
 > **Tips:** Anda juga dapat menggunakan perintah standar `ghive stop <nama-cron>` dan `ghive delete <nama-cron>` secara langsung. Gravhive otomatis mendeteksi jika target merupakan cron job.
 
-#### Melihat Log Eksekusi Cron:
-Log keluaran (*stdout* & *stderr*) setiap eksekusi cron otomatis tersimpan di ring buffer terpisah dan dapat dilihat dengan:
+#### Melihat & Memantau Log Eksekusi Cron (`ghive cron logs`):
+Setiap eksekusi scheduled job menangkap keluaran *stdout* dan *stderr* secara asinkron ke dalam memory ring buffer daemon. Anda dapat memantau log cron menggunakan sub-perintah khusus `ghive cron logs` maupun perintah standar `ghive logs`:
+
 ```bash
-ghive logs cron:nightly-backup -n 50
+# 1. Menampilkan 50 baris log terakhir untuk semua cron job
+ghive cron logs
+
+# 2. Menampilkan log untuk satu cron job tertentu
+ghive cron logs nightly-backup
+
+# 3. Live streaming (follow) log eksekusi secara real-time
+ghive cron logs nightly-backup -f
+# atau pantau seluruh cron job secara bersamaan:
+ghive cron logs -f
+
+# 4. Filter berdasarkan stream error (stderr) atau output normal (stdout)
+ghive cron logs nightly-backup --err    # alias cepat: -e
+ghive cron logs nightly-backup --out    # alias cepat: -o
+
+# 5. Mengatur jumlah baris log yang ditampilkan (default: 50)
+ghive cron logs nightly-backup -n 100
+
+# 6. Menggunakan perintah log standar Gravhive
+ghive logs cron                         # Menampilkan seluruh log cron
+ghive logs cron:nightly-backup -f       # Stream log cron job spesifik
+ghive logs nightly-backup               # Otomatis mengenali jika target adalah scheduled cron job
+```
+
+Contoh format log cron:
+```text
+2026-11-06T02:00:00Z [cron:nightly-backup] [OUT] Starting database dump to /var/backups/db-20261106.sql.gz
+2026-11-06T02:00:15Z [cron:nightly-backup] [OUT] Uploading snapshot to S3 bucket 'company-db-backups'...
+2026-11-06T02:00:42Z [cron:nightly-backup] [OUT] Backup completed successfully (size: 412 MB, duration: 42s)
 ```
 
 ### 10. WebAssembly Plugins (`ghive plugins`)

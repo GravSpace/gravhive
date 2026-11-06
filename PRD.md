@@ -313,7 +313,7 @@ max_restarts = 10
 | **`ghive list` / `ghive ls`** | `--json`, `--sort <col>`, `--mini` | Menampilkan tabel visual real-time status semua aplikasi aktif & non-aktif mirip PM2. |
 | **`ghive ecosystem` / `ghive init`** | `[toml\|yaml\|json]`, `--full` | Membuat file template konfigurasi ekosistem siap pakai (`ghive.toml`, `ghive.yaml`, atau `ecosystem.config.json`). |
 | **`ghive monit`** | - | Membuka TUI interactive terminal dashboard layar penuh untuk monitoring CPU, RAM, proses, dan logs. |
-| **`ghive logs [id\|name]`** | `-n, --lines <n>`, `-f, --follow`, `--err`, `--out`, `--timestamps` | Melakukan streaming log dari daemon secara real-time dari non-blocking memory buffer. |
+| **`ghive logs [id\|name]`** | `-n, --lines <n>`, `-f, --follow`, `--err`, `--out`, `--timestamps` | Melakukan streaming log dari daemon secara real-time dari non-blocking memory buffer (mendukung target `cron` atau prefix `cron:<job>` untuk cron logs). |
 | **`ghive flush [id\|name]`** | - | Mengosongkan file log aplikasi. |
 | **`ghive describe <id\|name>`** | - | Menampilkan detail teknis mendalam: PID, path, working directory, interpreter, variabel environment, batas resource, uptime, dan statistik crash. |
 | **`ghive save`** | `--force` | Menyimpan daftar proses aktif saat ini ke snapshot file (`dump.state`). |
@@ -327,7 +327,7 @@ max_restarts = 10
 | **`ghive scale <app> <n\|+n\|-n>`** | - | Menambah atau mengurangi jumlah worker instance aplikasi secara dinamis saat runtime tanpa menghentikan aplikasi. |
 | **`ghive logrotate [id\|name\|all]`** | - | Memutar (*rotate*) berkas log stdout/stderr dan mengompresi arsip lama menjadi `.gz` secara manual on-demand. |
 | **`ghive webhook`** / **`ghive alert`** | `set <url> [--type <t>] [--username <u>] [--channel <c>] [--chat-id <id>] [-H <k:v>]`, `list [--show-full]`, `test [-m <msg>]`, `delete <provider\|all>` | Mengelola endpoint webhook pemberitahuan (Discord, Slack, Telegram, Custom HTTP) secara persisten di `~/.gravhive/alerts.json` dan sinkron live via IPC ke daemon `ghived`. |
-| **`ghive cron`** | `list`, `timezone [tz]`, `set-timezone <tz>`, `stop <name\|all>`, `restart <name\|all>`, `delete <name\|all>` | Mengelola scheduled background jobs, melihat jadwal eksekusi, serta menyetel dan melihat konfigurasi zona waktu (IANA timezone atau `local`). |
+| **`ghive cron`** | `list`, `logs [name] [-n <n>] [-f] [-e] [-o]`, `timezone [tz]`, `set-timezone <tz>`, `stop <name\|all>`, `restart <name\|all>`, `delete <name\|all>` | Mengelola scheduled background jobs, melihat jadwal eksekusi, memantau live log output/error eksekusi cron, serta menyetel konfigurasi zona waktu (IANA timezone atau `local`). |
 | **`ghive metrics`** | `-p, --port <port>` (default: 9615) | Menjalankan HTTP server Prometheus / OpenMetrics exporter bawaan untuk scraping metrik performa oleh Grafana/Prometheus (termasuk kompatibilitas metrik `pm2_*`). |
 
 ---

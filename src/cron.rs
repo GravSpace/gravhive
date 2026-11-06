@@ -78,6 +78,32 @@ pub struct CronJobInfo {
     pub paused: bool,
     #[serde(default = "default_timezone_str")]
     pub timezone: String,
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+pub fn append_cron_log(name: &str, stream: &str, message: &str) {
+    let logs_dir = crate::common::logs_dir();
+    if let Err(e) = std::fs::create_dir_all(&logs_dir) {
+        warn!(
+            "[CRON] Failed to create logs directory '{}': {}",
+            logs_dir.display(),
+            e
+        );
+        return;
+    }
+    let file_path = logs_dir.join(format!("cron-{}-{}.log", name, stream));
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file_path)
+    {
+        use std::io::Write;
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        for line in message.lines() {
+            let _ = writeln!(f, "[{}] {}", now, line);
+        }
+    }
 }
 
 pub struct CronJob {
@@ -92,6 +118,7 @@ pub struct CronJob {
     pub last_status: String,
     pub paused: bool,
     pub timezone: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -212,6 +239,7 @@ impl CronManager {
             last_status: "Scheduled".to_string(),
             paused: false,
             timezone: canonical_tz_override.clone(),
+            last_error: None,
         };
 
         let mut lock = self.jobs.write().await;
@@ -301,6 +329,7 @@ impl CronManager {
                 last_status: j.last_status.clone(),
                 paused: j.paused,
                 timezone: j.timezone.clone().unwrap_or_else(|| default_tz.clone()),
+                last_error: j.last_error.clone(),
             })
             .collect()
     }
@@ -360,7 +389,7 @@ impl CronManager {
                         };
 
                         // Execute with timeout and capped output buffer to prevent resource exhaustion / DoS
-                        let status_str = match tokio::time::timeout(
+                        let (status_str, last_err) = match tokio::time::timeout(
                             DEFAULT_CRON_TIMEOUT,
                             cmd.output(),
                         )
@@ -401,8 +430,9 @@ impl CronManager {
                                         app_name: format!("cron:{}", name),
                                         worker_id: 0,
                                         stream: "out".to_string(),
-                                        message: stdout,
+                                        message: stdout.clone(),
                                     });
+                                    append_cron_log(&name, "out", &stdout);
                                 }
 
                                 if !stderr.is_empty() {
@@ -411,30 +441,67 @@ impl CronManager {
                                         app_name: format!("cron:{}", name),
                                         worker_id: 0,
                                         stream: "err".to_string(),
-                                        message: stderr,
+                                        message: stderr.clone(),
                                     });
+                                    append_cron_log(&name, "err", &stderr);
                                 }
 
                                 if out.status.success() {
-                                    "Success".to_string()
+                                    ("Success".to_string(), None)
                                 } else {
-                                    format!("Failed ({})", out.status)
+                                    let status_msg = format!("Failed ({})", out.status);
+                                    let err_desc = if !stderr.is_empty() {
+                                        stderr
+                                    } else {
+                                        let fail_entry = format!(
+                                            "[CRON ERROR] Process exited with failure status: {}",
+                                            out.status
+                                        );
+                                        log_hub.push(LogEntry {
+                                            timestamp: Utc::now(),
+                                            app_name: format!("cron:{}", name),
+                                            worker_id: 0,
+                                            stream: "err".to_string(),
+                                            message: fail_entry.clone(),
+                                        });
+                                        append_cron_log(&name, "err", &fail_entry);
+                                        status_msg.clone()
+                                    };
+                                    (status_msg, Some(err_desc))
                                 }
                             }
                             Ok(Err(e)) => {
-                                error!("[CRON] Failed to spawn job '{}': {}", name, e);
-                                format!("Error: {}", e)
-                            }
-                            Err(_) => {
-                                warn!("[CRON] Job '{}' exceeded maximum timeout of 30 minutes, terminated", name);
+                                let err_msg = format!(
+                                    "[CRON SPAWN ERROR] Failed to spawn job '{}': {}",
+                                    name, e
+                                );
+                                error!("{}", err_msg);
                                 log_hub.push(LogEntry {
                                     timestamp: Utc::now(),
                                     app_name: format!("cron:{}", name),
                                     worker_id: 0,
                                     stream: "err".to_string(),
-                                    message: "[CRON ERROR] Job exceeded maximum execution timeout of 30 minutes".to_string(),
+                                    message: err_msg.clone(),
                                 });
-                                "Timed Out (30m)".to_string()
+                                append_cron_log(&name, "err", &err_msg);
+                                (format!("Error: {}", e), Some(err_msg))
+                            }
+                            Err(_) => {
+                                let timeout_msg =
+                                    "[CRON ERROR] Job exceeded maximum execution timeout of 30 minutes".to_string();
+                                warn!(
+                                    "[CRON] Job '{}' exceeded maximum timeout of 30 minutes, terminated",
+                                    name
+                                );
+                                log_hub.push(LogEntry {
+                                    timestamp: Utc::now(),
+                                    app_name: format!("cron:{}", name),
+                                    worker_id: 0,
+                                    stream: "err".to_string(),
+                                    message: timeout_msg.clone(),
+                                });
+                                append_cron_log(&name, "err", &timeout_msg);
+                                ("Timed Out (30m)".to_string(), Some(timeout_msg))
                             }
                         };
 
@@ -442,6 +509,7 @@ impl CronManager {
                         if let Some(j) = lock.get_mut(&name) {
                             if !j.paused {
                                 j.last_status = status_str;
+                                j.last_error = last_err;
                             }
                         }
                     });
@@ -567,5 +635,50 @@ mod tests {
         cron.set_default_timezone("Asia/Tokyo").await.unwrap();
         let jobs2 = cron.list_jobs().await;
         assert_eq!(jobs2[0].timezone, "America/New_York");
+    }
+
+    #[test]
+    fn test_cron_append_disk_log() {
+        let job_name = "test-log-audit";
+        append_cron_log(job_name, "out", "Task finished successfully");
+        append_cron_log(job_name, "err", "Warning: rate limit near threshold");
+
+        let logs_dir = crate::common::logs_dir();
+        let out_file = logs_dir.join(format!("cron-{}-out.log", job_name));
+        let err_file = logs_dir.join(format!("cron-{}-err.log", job_name));
+
+        assert!(out_file.exists());
+        assert!(err_file.exists());
+
+        let out_content = std::fs::read_to_string(&out_file).unwrap();
+        assert!(out_content.contains("Task finished successfully"));
+
+        let err_content = std::fs::read_to_string(&err_file).unwrap();
+        assert!(err_content.contains("Warning: rate limit near threshold"));
+
+        // Cleanup test files
+        let _ = std::fs::remove_file(out_file);
+        let _ = std::fs::remove_file(err_file);
+    }
+
+    #[tokio::test]
+    async fn test_cron_spawn_failure_records_error() {
+        let hub = LogHub::new(10);
+        let cron = CronManager::new(hub.clone());
+
+        cron.add_job(
+            "invalid-bin",
+            "0 0 1 * * *",
+            None,
+            "non_existent_binary_xyz_12345",
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let jobs = cron.list_jobs().await;
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].last_error, None);
+        assert_eq!(jobs[0].last_status, "Scheduled");
     }
 }

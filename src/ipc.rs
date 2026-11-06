@@ -420,7 +420,16 @@ async fn handle_client(
                     let mut rx = log_hub.subscribe();
                     while let Ok(entry) = rx.recv().await {
                         let matches_app = match &app_filter {
-                            Some(app) => &entry.app_name == app,
+                            Some(app) => {
+                                if app == "cron" {
+                                    entry.app_name.starts_with("cron:")
+                                } else if app.starts_with("cron:") {
+                                    &entry.app_name == app
+                                } else {
+                                    &entry.app_name == app
+                                        || entry.app_name == format!("cron:{}", app)
+                                }
+                            }
                             None => true,
                         };
                         if matches_app && matches_stream(&entry, stream) {

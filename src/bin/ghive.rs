@@ -469,6 +469,28 @@ pub enum CronAction {
     #[command(alias = "ls")]
     List,
 
+    /// View logs for scheduled cron jobs
+    Logs {
+        /// Name of the cron job or omit to view logs across all cron jobs
+        name: Option<String>,
+
+        /// Number of recent lines to display
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+
+        /// Stream logs in real-time
+        #[arg(short = 'f', long)]
+        follow: bool,
+
+        /// Show only standard error logs
+        #[arg(short = 'e', long)]
+        err: bool,
+
+        /// Show only standard output logs
+        #[arg(short = 'o', long)]
+        out: bool,
+    },
+
     /// View or get current cron timezone setting
     #[command(alias = "tz")]
     Timezone {
@@ -1003,7 +1025,18 @@ async fn main() -> Result<()> {
                             } else if j.last_status.starts_with("Failed")
                                 || j.last_status.starts_with("Error")
                             {
-                                Cell::new(&j.last_status).fg(TableColor::Red)
+                                let status_display = if let Some(ref err) = j.last_error {
+                                    let first_line = err.lines().next().unwrap_or("").trim();
+                                    let preview = if first_line.len() > 35 {
+                                        format!("{}...", &first_line[..35])
+                                    } else {
+                                        first_line.to_string()
+                                    };
+                                    format!("{} ({})", j.last_status, preview)
+                                } else {
+                                    j.last_status.clone()
+                                };
+                                Cell::new(status_display).fg(TableColor::Red)
                             } else {
                                 Cell::new(&j.last_status)
                             };
@@ -1020,8 +1053,68 @@ async fn main() -> Result<()> {
                             ]);
                         }
                         println!("\n{}\n", table);
+                        println!(
+                            "  {} Tip: Run `{}` to inspect live or recent logs.\n",
+                            "💡".cyan(),
+                            "ghive cron logs <job>".bold()
+                        );
                     }
                 }
+            }
+            CronAction::Logs {
+                name,
+                lines,
+                follow,
+                err,
+                out,
+            } => {
+                let target_name = match name {
+                    Some(n) => {
+                        if n.starts_with("cron:") {
+                            n
+                        } else {
+                            format!("cron:{}", n)
+                        }
+                    }
+                    None => "cron".to_string(),
+                };
+
+                let selector = Some(TargetSelector::Name(target_name));
+                let stream = if err {
+                    LogStreamType::Stderr
+                } else if out {
+                    LogStreamType::Stdout
+                } else {
+                    LogStreamType::All
+                };
+
+                IpcClient::stream_logs(
+                    Request::Logs {
+                        target: selector,
+                        lines,
+                        follow,
+                        stream,
+                    },
+                    |entry| {
+                        let stream_tag = if entry.stream == "err" {
+                            "[ERR]".red().bold()
+                        } else {
+                            "[OUT]".green().bold()
+                        };
+                        println!(
+                            "{} {} [{}] {}",
+                            entry
+                                .timestamp
+                                .format("%Y-%m-%d %H:%M:%S")
+                                .to_string()
+                                .dimmed(),
+                            stream_tag,
+                            entry.app_name.cyan(),
+                            entry.message
+                        );
+                    },
+                )
+                .await?;
             }
             CronAction::Timezone { timezone } => {
                 if let Some(tz) = timezone {
