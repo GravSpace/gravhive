@@ -447,12 +447,26 @@ async fn handle_client(
                 }
             }
             Request::Save => {
-                let mgr = manager.read().await;
                 let path = crate::common::state_file_path();
-                match mgr.save_state(&path) {
+                let save_res = {
+                    let mgr = manager.read().await;
+                    mgr.save_state(&path)
+                };
+
+                let cron_saved = if let Some(ref cron) = cron_manager {
+                    cron.save_to_disk().await.is_ok()
+                } else {
+                    true
+                };
+
+                match save_res {
                     Ok(_) => {
+                        let cron_msg = if cron_saved { " and cron jobs" } else { "" };
                         let resp = Response::Ok {
-                            message: format!("Active processes snapshot saved to {:?}", path),
+                            message: format!(
+                                "Active processes{} snapshot saved to {:?}",
+                                cron_msg, path
+                            ),
                         };
                         writer.send(serde_json::to_string(&resp)?).await?;
                     }
@@ -467,12 +481,21 @@ async fn handle_client(
             Request::Resurrect => {
                 let path = crate::common::state_file_path();
                 let mut mgr = manager.write().await;
-                match mgr.resurrect_state(&path).await {
+                let proc_res = mgr.resurrect_state(&path).await;
+                drop(mgr);
+
+                let cron_count = if let Some(ref cron) = cron_manager {
+                    cron.load_from_disk().await.unwrap_or(0)
+                } else {
+                    0
+                };
+
+                match proc_res {
                     Ok(count) => {
                         let resp = Response::Ok {
                             message: format!(
-                                "Successfully resurrected {} apps from {:?}",
-                                count, path
+                                "Successfully resurrected {} apps and {} scheduled cron jobs from snapshot",
+                                count, cron_count
                             ),
                         };
                         writer.send(serde_json::to_string(&resp)?).await?;
@@ -729,6 +752,16 @@ async fn handle_client(
                         .to_string(),
                 };
                 let _ = writer.send(serde_json::to_string(&resp)?).await;
+
+                // Auto-save running apps and cron jobs before terminating
+                let state_file = crate::common::state_file_path();
+                {
+                    let mgr = manager.read().await;
+                    let _ = mgr.save_state(&state_file);
+                }
+                if let Some(ref cron) = cron_manager {
+                    let _ = cron.save_to_disk().await;
+                }
 
                 // Stop all managed workers gracefully
                 let mut mgr = manager.write().await;

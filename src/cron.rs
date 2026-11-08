@@ -20,10 +20,25 @@ pub fn default_timezone_str() -> String {
     "UTC".to_string()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CronJobRecord {
+    pub name: String,
+    pub expression: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub timezone: Option<String>,
+    #[serde(default)]
+    pub paused: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronConfig {
     #[serde(default = "default_timezone_str")]
     pub timezone: String,
+    #[serde(default)]
+    pub jobs: Vec<CronJobRecord>,
 }
 
 impl CronConfig {
@@ -174,17 +189,69 @@ impl CronManager {
             }
         }
 
-        // Save global config
-        let cfg = CronConfig {
-            timezone: canonical_tz.clone(),
-        };
-        let _ = cfg.save_global();
+        // Save global config including all current jobs
+        let _ = self.save_to_disk().await;
 
         info!(
             "[CRON] Set default timezone to '{}' ({})",
             canonical_tz, offset
         );
         Ok((canonical_tz, offset))
+    }
+
+    /// Save current cron configuration and all scheduled jobs to ~/.gravhive/cron.json
+    pub async fn save_to_disk(&self) -> Result<()> {
+        let timezone = self.default_timezone.read().await.clone();
+        let jobs_lock = self.jobs.read().await;
+        let mut job_records = Vec::new();
+        for job in jobs_lock.values() {
+            job_records.push(CronJobRecord {
+                name: job.name.clone(),
+                expression: job.expression.clone(),
+                command: job.command.clone(),
+                args: job.args.clone(),
+                timezone: job.timezone.clone(),
+                paused: job.paused,
+            });
+        }
+        drop(jobs_lock);
+
+        let cfg = CronConfig {
+            timezone,
+            jobs: job_records,
+        };
+        cfg.save_global()
+    }
+
+    /// Reload cron configuration and restore all scheduled jobs from ~/.gravhive/cron.json
+    pub async fn load_from_disk(&self) -> Result<usize> {
+        if let Some(cfg) = CronConfig::load_global()? {
+            if let Ok(tz) = resolve_timezone(&cfg.timezone) {
+                let canonical_tz = tz.name().to_string();
+                let mut dt = self.default_timezone.write().await;
+                *dt = canonical_tz;
+            }
+
+            let mut count = 0;
+            for rec in cfg.jobs {
+                let res = self
+                    .add_job_internal(
+                        &rec.name,
+                        &rec.expression,
+                        rec.timezone.as_deref(),
+                        &rec.command,
+                        &rec.args,
+                        rec.paused,
+                    )
+                    .await;
+                if res.is_ok() {
+                    count += 1;
+                }
+            }
+            Ok(count)
+        } else {
+            Ok(0)
+        }
     }
 
     pub fn calculate_next_run(schedule: &Schedule, tz_str: &str) -> Option<DateTime<Utc>> {
@@ -198,13 +265,14 @@ impl CronManager {
         }
     }
 
-    pub async fn add_job(
+    async fn add_job_internal(
         &self,
         name: &str,
         expression: &str,
         tz_override: Option<&str>,
         command: &str,
         args: &[String],
+        paused: bool,
     ) -> Result<()> {
         let normalized = if expression.split_whitespace().count() == 5 {
             format!("0 {}", expression)
@@ -225,7 +293,17 @@ impl CronManager {
 
         let default_tz = self.default_timezone.read().await.clone();
         let effective_tz = canonical_tz_override.as_deref().unwrap_or(&default_tz);
-        let next_run = Self::calculate_next_run(&schedule, effective_tz);
+        let next_run = if paused {
+            None
+        } else {
+            Self::calculate_next_run(&schedule, effective_tz)
+        };
+
+        let last_status = if paused {
+            "Stopped".to_string()
+        } else {
+            "Scheduled".to_string()
+        };
 
         let job = CronJob {
             name: name.to_string(),
@@ -236,8 +314,8 @@ impl CronManager {
             last_run: None,
             next_run,
             runs_count: 0,
-            last_status: "Scheduled".to_string(),
-            paused: false,
+            last_status,
+            paused,
             timezone: canonical_tz_override.clone(),
             last_error: None,
         };
@@ -245,15 +323,29 @@ impl CronManager {
         let mut lock = self.jobs.write().await;
         lock.insert(name.to_string(), job);
         info!(
-            "[CRON] Registered job '{}' with schedule '{}' (Timezone: {}, Next run: {:?})",
-            name, expression, effective_tz, next_run
+            "[CRON] Registered job '{}' with schedule '{}' (Timezone: {}, Paused: {}, Next run: {:?})",
+            name, expression, effective_tz, paused, next_run
         );
+        Ok(())
+    }
+
+    pub async fn add_job(
+        &self,
+        name: &str,
+        expression: &str,
+        tz_override: Option<&str>,
+        command: &str,
+        args: &[String],
+    ) -> Result<()> {
+        self.add_job_internal(name, expression, tz_override, command, args, false)
+            .await?;
+        let _ = self.save_to_disk().await;
         Ok(())
     }
 
     pub async fn stop_job(&self, name: &str) -> Result<usize> {
         let mut lock = self.jobs.write().await;
-        if name == "all" {
+        let count = if name == "all" {
             let mut count = 0;
             for job in lock.values_mut() {
                 if !job.paused {
@@ -263,21 +355,24 @@ impl CronManager {
                 }
             }
             info!("[CRON] Stopped all ({}) cron jobs", count);
-            Ok(count)
+            count
         } else if let Some(job) = lock.get_mut(name) {
             job.paused = true;
             job.last_status = "Stopped".to_string();
             info!("[CRON] Stopped cron job '{}'", name);
-            Ok(1)
+            1
         } else {
             anyhow::bail!("Cron job '{}' not found", name);
-        }
+        };
+        drop(lock);
+        let _ = self.save_to_disk().await;
+        Ok(count)
     }
 
     pub async fn restart_job(&self, name: &str) -> Result<usize> {
         let default_tz = self.default_timezone.read().await.clone();
         let mut lock = self.jobs.write().await;
-        if name == "all" {
+        let count = if name == "all" {
             let mut count = 0;
             for job in lock.values_mut() {
                 job.paused = false;
@@ -287,32 +382,38 @@ impl CronManager {
                 count += 1;
             }
             info!("[CRON] Resumed all ({}) cron jobs", count);
-            Ok(count)
+            count
         } else if let Some(job) = lock.get_mut(name) {
             job.paused = false;
             job.last_status = "Scheduled".to_string();
             let effective_tz = job.timezone.as_deref().unwrap_or(&default_tz);
             job.next_run = Self::calculate_next_run(&job.schedule, effective_tz);
             info!("[CRON] Resumed cron job '{}'", name);
-            Ok(1)
+            1
         } else {
             anyhow::bail!("Cron job '{}' not found", name);
-        }
+        };
+        drop(lock);
+        let _ = self.save_to_disk().await;
+        Ok(count)
     }
 
     pub async fn delete_job(&self, name: &str) -> Result<usize> {
         let mut lock = self.jobs.write().await;
-        if name == "all" {
+        let count = if name == "all" {
             let count = lock.len();
             lock.clear();
             info!("[CRON] Deleted all ({}) cron jobs", count);
-            Ok(count)
+            count
         } else if lock.remove(name).is_some() {
             info!("[CRON] Deleted cron job '{}'", name);
-            Ok(1)
+            1
         } else {
             anyhow::bail!("Cron job '{}' not found", name);
-        }
+        };
+        drop(lock);
+        let _ = self.save_to_disk().await;
+        Ok(count)
     }
 
     pub async fn list_jobs(&self) -> Vec<CronJobInfo> {
@@ -680,5 +781,84 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].last_error, None);
         assert_eq!(jobs[0].last_status, "Scheduled");
+    }
+
+    #[tokio::test]
+    async fn test_cron_persistence_to_disk() {
+        let cron_file =
+            std::env::temp_dir().join(format!("test-cron-{}.json", rand::random::<u64>()));
+
+        let hub = LogHub::new(10);
+        let cron1 = CronManager::new_with_timezone(hub.clone(), "Asia/Jakarta");
+        cron1
+            .add_job("task-1", "0 */5 * * * *", None, "echo", &["hello".into()])
+            .await
+            .unwrap();
+        cron1
+            .add_job(
+                "task-2",
+                "0 0 12 * * *",
+                Some("America/New_York"),
+                "echo",
+                &["noon".into()],
+            )
+            .await
+            .unwrap();
+
+        // Pause task-2
+        cron1.stop_job("task-2").await.unwrap();
+
+        // Serialize manually to test file
+        let timezone = cron1.default_timezone.read().await.clone();
+        let jobs_lock = cron1.jobs.read().await;
+        let mut job_records = Vec::new();
+        for job in jobs_lock.values() {
+            job_records.push(CronJobRecord {
+                name: job.name.clone(),
+                expression: job.expression.clone(),
+                command: job.command.clone(),
+                args: job.args.clone(),
+                timezone: job.timezone.clone(),
+                paused: job.paused,
+            });
+        }
+        let cfg = CronConfig {
+            timezone,
+            jobs: job_records,
+        };
+        let json = serde_json::to_string_pretty(&cfg).unwrap();
+        std::fs::write(&cron_file, &json).unwrap();
+
+        // Create a new fresh cron manager and reload from serialized config
+        let cron2 = CronManager::new(hub.clone());
+        let content = std::fs::read_to_string(&cron_file).unwrap();
+        let loaded_cfg: CronConfig = serde_json::from_str(&content).unwrap();
+
+        let mut loaded_count = 0;
+        for rec in loaded_cfg.jobs {
+            let res = cron2
+                .add_job_internal(
+                    &rec.name,
+                    &rec.expression,
+                    rec.timezone.as_deref(),
+                    &rec.command,
+                    &rec.args,
+                    rec.paused,
+                )
+                .await;
+            if res.is_ok() {
+                loaded_count += 1;
+            }
+        }
+
+        assert_eq!(loaded_count, 2);
+        let list = cron2.list_jobs().await;
+        assert_eq!(list.len(), 2);
+
+        let t2 = list.iter().find(|j| j.name == "task-2").unwrap();
+        assert!(t2.paused);
+        assert_eq!(t2.timezone, "America/New_York");
+
+        let _ = std::fs::remove_file(cron_file);
     }
 }

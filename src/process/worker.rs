@@ -166,9 +166,13 @@ impl Worker {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("Failed to spawn process for app '{}'", self.app_name))?;
+        let mut child = cmd.spawn().with_context(|| {
+            format!(
+                "Failed to spawn process for app '{}' (executable: {:?})",
+                self.app_name,
+                cmd.as_std().get_program()
+            )
+        })?;
 
         let pid = child.id().unwrap_or(0);
         self.pid = Some(pid);

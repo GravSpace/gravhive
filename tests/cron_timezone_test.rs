@@ -7,6 +7,7 @@ use gravhive::ring_buffer::LogHub;
 fn test_cron_config_serialization() {
     let cfg = CronConfig {
         timezone: "Asia/Jakarta".to_string(),
+        jobs: vec![],
     };
     let json = serde_json::to_string(&cfg).expect("Failed to serialize");
     let deserialized: CronConfig = serde_json::from_str(&json).expect("Failed to deserialize");

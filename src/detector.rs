@@ -36,11 +36,25 @@ pub fn detect_runtime(input: &str, initial_args: &[String]) -> DetectedExecution
     let mut final_args = initial_args.to_vec();
 
     match ext.as_str() {
-        "js" | "mjs" | "cjs" => DetectedExecution {
-            interpreter: Some("node".to_string()),
-            script: trimmed.to_string(),
-            args: final_args,
-        },
+        "js" | "mjs" | "cjs" => {
+            // Prefer node if available, fallback to bun or deno
+            let interp = if is_command_available("node") {
+                "node"
+            } else if is_command_available("bun") {
+                "bun"
+            } else if is_command_available("deno") {
+                final_args.insert(0, "run".to_string());
+                final_args.insert(1, "-A".to_string());
+                "deno"
+            } else {
+                "node"
+            };
+            DetectedExecution {
+                interpreter: Some(interp.to_string()),
+                script: trimmed.to_string(),
+                args: final_args,
+            }
+        }
         "ts" | "mts" | "cts" => {
             // Prefer bun if bun is available in PATH, otherwise deno or ts-node
             let interp = if is_command_available("bun") {

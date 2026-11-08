@@ -108,6 +108,7 @@ impl ProcessManager {
             .unwrap_or(8081);
 
         let mut started_ids = Vec::new();
+        let mut first_spawn_error = None;
 
         for i in 0..instances {
             let id = self.next_id;
@@ -124,17 +125,28 @@ impl ProcessManager {
                 Worker::new(id, app_name.clone(), i, worker_config, self.log_hub.clone());
 
             if let Err(e) = worker.spawn().await {
+                let err_msg = format!("{:#}", e);
                 error!(
                     "Failed to spawn worker #{} for app '{}': {}",
-                    id, app_name, e
+                    id, app_name, err_msg
                 );
                 worker.status = ProcessStatus::Errored;
+                self.log_hub.push(LogEntry {
+                    timestamp: Utc::now(),
+                    app_name: app_name.clone(),
+                    worker_id: id,
+                    stream: "err".to_string(),
+                    message: format!("Spawn failed: {}", err_msg),
+                });
                 self.event_journal.record_event(
                     &app_name,
                     Some(id),
                     EventType::Crashed,
-                    &format!("Spawn failed: {}", e),
+                    &format!("Spawn failed: {}", err_msg),
                 );
+                if first_spawn_error.is_none() {
+                    first_spawn_error = Some(err_msg);
+                }
             } else {
                 started_ids.push(id);
                 self.event_journal.record_event(
@@ -169,6 +181,12 @@ impl ProcessManager {
                     }
                 }
             }
+        }
+
+        if started_ids.is_empty() && instances > 0 {
+            let err = first_spawn_error
+                .unwrap_or_else(|| "Failed to spawn worker instance".to_string());
+            bail!("{}", err);
         }
 
         Ok(started_ids)
@@ -747,6 +765,9 @@ impl ProcessManager {
     }
 
     pub fn save_state(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let configs: Vec<ProcessConfig> = self.apps.values().cloned().collect();
         let json = serde_json::to_string_pretty(&configs)?;
         std::fs::write(path, json)?;
@@ -754,12 +775,28 @@ impl ProcessManager {
     }
 
     pub async fn resurrect_state(&mut self, path: &Path) -> Result<usize> {
+        if !path.exists() {
+            return Ok(0);
+        }
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read state dump file: {}", path.display()))?;
+        if content.trim().is_empty() {
+            return Ok(0);
+        }
         let configs: Vec<ProcessConfig> = serde_json::from_str(&content)?;
-        let count = configs.len();
+        let mut count = 0;
         for config in configs {
-            let _ = self.start_app(config).await;
+            let already_running = self
+                .workers
+                .iter()
+                .any(|w| w.app_name == config.name && w.status == ProcessStatus::Online);
+            if !already_running {
+                if self.start_app(config).await.is_ok() {
+                    count += 1;
+                }
+            } else {
+                count += 1;
+            }
         }
         Ok(count)
     }

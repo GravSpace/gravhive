@@ -82,7 +82,37 @@ async fn main() -> Result<()> {
         }
     }
     let cron_manager = CronManager::new_with_timezone(log_hub.clone(), &cron_timezone);
+    if let Ok(count) = cron_manager.load_from_disk().await {
+        if count > 0 {
+            info!(
+                "Restored {} scheduled cron jobs from ~/.gravhive/cron.json",
+                count
+            );
+        }
+    }
     cron_manager.clone().start_loop();
+
+    // Auto-resurrect processes from dump.json if available
+    let state_file = gravhive::common::state_file_path();
+    if state_file.exists() {
+        let mut mgr = manager.write().await;
+        match mgr.resurrect_state(&state_file).await {
+            Ok(count) if count > 0 => {
+                info!(
+                    "Auto-resurrected {} applications from {:?}",
+                    count, state_file
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to auto-resurrect applications from {:?}: {}",
+                    state_file,
+                    e
+                );
+            }
+        }
+    }
 
     // Initialize Socket Activation Manager
     let socket_activation = SocketActivationManager::new(manager.clone());
@@ -110,6 +140,7 @@ async fn main() -> Result<()> {
 
     // Handle OS shutdown signals (SIGINT, SIGTERM)
     let manager_shutdown = manager.clone();
+    let cron_shutdown = cron_manager.clone();
     tokio::spawn(async move {
         let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
             .expect("Failed to register SIGINT handler");
@@ -120,6 +151,14 @@ async fn main() -> Result<()> {
             _ = sigint.recv() => info!("Received SIGINT, initiating graceful shutdown..."),
             _ = sigterm.recv() => info!("Received SIGTERM, initiating graceful shutdown..."),
         }
+
+        // Auto-save running apps and cron jobs before terminating
+        let state_file = gravhive::common::state_file_path();
+        {
+            let mgr = manager_shutdown.read().await;
+            let _ = mgr.save_state(&state_file);
+        }
+        let _ = cron_shutdown.save_to_disk().await;
 
         let mut mgr = manager_shutdown.write().await;
         let _ = mgr

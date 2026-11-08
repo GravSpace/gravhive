@@ -1724,6 +1724,9 @@ fn prepare_process_configs(
         };
 
         for cfg in configs.iter_mut() {
+            if let Ok(caller_path) = std::env::var("PATH") {
+                cfg.env.entry("PATH".to_string()).or_insert(caller_path);
+            }
             if let Some(ref f_envs) = file_envs {
                 for (k, v) in f_envs {
                     cfg.env.entry(k.clone()).or_insert_with(|| v.clone());
@@ -1771,6 +1774,9 @@ fn prepare_process_configs(
     let mem_limit = max_memory_restart.as_deref().and_then(parse_memory_string);
 
     let mut env_map = HashMap::new();
+    if let Ok(caller_path) = std::env::var("PATH") {
+        env_map.insert("PATH".to_string(), caller_path);
+    }
     if let Some(ref path) = env_file {
         let loaded = gravhive::env_loader::load_env_file(path)?;
         println!(

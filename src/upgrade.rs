@@ -344,18 +344,80 @@ impl Upgrader {
             current_target
         );
 
-        // Check if daemon is running and restart it gracefully
+        // Check if daemon is running and restart it gracefully with state resurrection
         if crate::ipc::IpcClient::ping().await.is_ok() {
             println!(
-                "{} Restarting running background daemon with updated binary...",
+                "{} Preserving running state and restarting background daemon with updated binary...",
                 "↺".cyan()
             );
+
+            // 1. Explicitly save process snapshot and cron jobs to disk
+            let _ = crate::ipc::IpcClient::send_request(crate::protocol::Request::Save).await;
+
+            // 2. Request graceful daemon shutdown
             let _ = crate::ipc::IpcClient::send_request(crate::protocol::Request::Shutdown).await;
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            println!(
-                "{} Daemon restarted. Your running apps will remain preserved on restart.",
-                "✓".green()
-            );
+
+            // 3. Wait for previous daemon process to terminate
+            let start_exit = std::time::Instant::now();
+            while start_exit.elapsed() < std::time::Duration::from_secs(4) {
+                if crate::ipc::IpcClient::ping().await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+
+            // 4. Ensure new daemon is running (either auto-restarted by systemd/launchd or spawn directly)
+            let mut daemon_ready = false;
+            let check_service_start = std::time::Instant::now();
+            while check_service_start.elapsed() < std::time::Duration::from_millis(1500) {
+                if crate::ipc::IpcClient::ping().await.is_ok() {
+                    daemon_ready = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            }
+
+            if !daemon_ready && current_ghived.exists() {
+                let _ = std::process::Command::new(&current_ghived)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+
+                let start_spawn_wait = std::time::Instant::now();
+                while start_spawn_wait.elapsed() < std::time::Duration::from_secs(5) {
+                    if crate::ipc::IpcClient::ping().await.is_ok() {
+                        daemon_ready = true;
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                }
+            }
+
+            // 5. Trigger resurrection to restore running apps and cron jobs
+            if daemon_ready {
+                match crate::ipc::IpcClient::send_request(crate::protocol::Request::Resurrect).await
+                {
+                    Ok(crate::protocol::Response::Ok { message }) => {
+                        println!(
+                            "{} Daemon restarted successfully. {}",
+                            "✓".green().bold(),
+                            message
+                        );
+                    }
+                    _ => {
+                        println!(
+                            "{} Daemon restarted with updated binary.",
+                            "✓".green().bold()
+                        );
+                    }
+                }
+            } else {
+                println!(
+                    "{} Daemon stopped for binary update. Run `ghive resurrect` or start an app to resume with the new version.",
+                    "ℹ".cyan()
+                );
+            }
         }
 
         if let Some(ref notes) = release.body {
