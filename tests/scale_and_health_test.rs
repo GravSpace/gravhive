@@ -39,6 +39,7 @@ async fn test_dynamic_scale_process_manager() {
         cluster_proxy: None,
         internal_port_base: None,
         idle_timeout_secs: None,
+        idle_mode: None,
         log_rotate_max_size: None,
         log_rotate_keep: None,
         log_compress: true,

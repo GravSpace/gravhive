@@ -312,7 +312,8 @@ impl Worker {
                 #[cfg(unix)]
                 {
                     let nix_pid = Pid::from_raw(pid as i32);
-                    // Send SIGTERM
+                    // Ensure process is resumed if suspended so it can process SIGTERM
+                    let _ = kill(nix_pid, Signal::SIGCONT);
                     let _ = kill(nix_pid, Signal::SIGTERM);
                 }
 
@@ -378,6 +379,45 @@ impl Worker {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn suspend(&mut self) -> Result<()> {
+        if self.status != ProcessStatus::Online {
+            return Ok(());
+        }
+        if let Some(pid) = self.pid {
+            debug!(
+                "[app: {}] Suspending worker #{} (PID {}) via SIGSTOP",
+                self.app_name, self.id, pid
+            );
+            #[cfg(unix)]
+            {
+                let nix_pid = Pid::from_raw(pid as i32);
+                let _ = kill(nix_pid, Signal::SIGSTOP);
+            }
+            self.status = ProcessStatus::Idle;
+            self.cpu_percent = 0.0;
+        }
+        Ok(())
+    }
+
+    pub fn resume(&mut self) -> Result<()> {
+        if self.status != ProcessStatus::Idle {
+            return Ok(());
+        }
+        if let Some(pid) = self.pid {
+            debug!(
+                "[app: {}] Resuming worker #{} (PID {}) via SIGCONT",
+                self.app_name, self.id, pid
+            );
+            #[cfg(unix)]
+            {
+                let nix_pid = Pid::from_raw(pid as i32);
+                let _ = kill(nix_pid, Signal::SIGCONT);
+            }
+            self.status = ProcessStatus::Online;
+        }
+        Ok(())
     }
 
     pub fn uptime_secs(&self) -> u64 {

@@ -195,7 +195,9 @@ impl ProcessManager {
     pub async fn stop(&mut self, target: &TargetSelector, timeout: Duration) -> Result<usize> {
         let mut affected = 0;
         for worker in self.workers.iter_mut() {
-            if matches_target(worker, target) && worker.status == ProcessStatus::Online {
+            if matches_target(worker, target)
+                && (worker.status == ProcessStatus::Online || worker.status == ProcessStatus::Idle)
+            {
                 worker.stop(timeout).await?;
                 self.event_journal.record_event(
                     &worker.app_name,
@@ -209,11 +211,57 @@ impl ProcessManager {
         Ok(affected)
     }
 
+    pub async fn suspend(&mut self, target: &TargetSelector) -> Result<usize> {
+        let mut affected = 0;
+        for worker in self.workers.iter_mut() {
+            if matches_target(worker, target) && worker.status == ProcessStatus::Online {
+                if let Err(e) = worker.suspend() {
+                    warn!(
+                        "Failed to suspend worker #{} of app '{}': {}",
+                        worker.id, worker.app_name, e
+                    );
+                } else {
+                    affected += 1;
+                    self.event_journal.record_event(
+                        &worker.app_name,
+                        Some(worker.id),
+                        EventType::Suspended,
+                        "Worker paused via SIGSTOP (idle scale-to-zero)",
+                    );
+                }
+            }
+        }
+        Ok(affected)
+    }
+
+    pub async fn resume(&mut self, target: &TargetSelector) -> Result<usize> {
+        let mut affected = 0;
+        for worker in self.workers.iter_mut() {
+            if matches_target(worker, target) && worker.status == ProcessStatus::Idle {
+                if let Err(e) = worker.resume() {
+                    warn!(
+                        "Failed to resume worker #{} of app '{}': {}",
+                        worker.id, worker.app_name, e
+                    );
+                } else {
+                    affected += 1;
+                    self.event_journal.record_event(
+                        &worker.app_name,
+                        Some(worker.id),
+                        EventType::Resumed,
+                        "Worker resumed via SIGCONT (socket active)",
+                    );
+                }
+            }
+        }
+        Ok(affected)
+    }
+
     pub async fn restart(&mut self, target: &TargetSelector, timeout: Duration) -> Result<usize> {
         let mut affected = 0;
         for worker in self.workers.iter_mut() {
             if matches_target(worker, target) {
-                if worker.status == ProcessStatus::Online {
+                if worker.status == ProcessStatus::Online || worker.status == ProcessStatus::Idle {
                     let _ = worker.stop(timeout).await;
                 }
                 if let Err(e) = worker.spawn().await {
@@ -479,7 +527,7 @@ impl ProcessManager {
 
         for mut worker in self.workers.drain(..) {
             if matches_target(&worker, target) {
-                if worker.status == ProcessStatus::Online {
+                if worker.status == ProcessStatus::Online || worker.status == ProcessStatus::Idle {
                     let _ = worker.stop(timeout).await;
                 }
                 affected += 1;
@@ -786,10 +834,10 @@ impl ProcessManager {
         let configs: Vec<ProcessConfig> = serde_json::from_str(&content)?;
         let mut count = 0;
         for config in configs {
-            let already_running = self
-                .workers
-                .iter()
-                .any(|w| w.app_name == config.name && w.status == ProcessStatus::Online);
+            let already_running = self.workers.iter().any(|w| {
+                w.app_name == config.name
+                    && (w.status == ProcessStatus::Online || w.status == ProcessStatus::Idle)
+            });
             if !already_running {
                 if self.start_app(config).await.is_ok() {
                     count += 1;

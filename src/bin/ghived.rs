@@ -115,8 +115,27 @@ async fn main() -> Result<()> {
     }
 
     // Initialize Socket Activation Manager
-    let socket_activation = SocketActivationManager::new(manager.clone());
+    let socket_activation = Arc::new(SocketActivationManager::new(manager.clone()));
     socket_activation.start_idle_checker();
+
+    // Auto-register resurrected socket activation apps if any
+    {
+        let mgr = manager.read().await;
+        for config in mgr.get_active_configs() {
+            if let (Some(lp), Some(tp), Some(idle_secs)) = (
+                config.listen_port,
+                config.target_port,
+                config.idle_timeout_secs,
+            ) {
+                let sa = socket_activation.clone();
+                let name = config.name.clone();
+                let mode = config.idle_mode.unwrap_or_default();
+                tokio::spawn(async move {
+                    let _ = sa.register(&name, lp, tp, idle_secs, mode).await;
+                });
+            }
+        }
+    }
 
     // Initialize WASM Plugin Manager
     let wasm_manager = Arc::new(WasmPluginManager::new());
@@ -177,6 +196,7 @@ async fn main() -> Result<()> {
         Some(cron_manager),
         Some(wasm_manager),
         Some(alert_manager),
+        Some(socket_activation),
     );
     ipc_server.run().await?;
 

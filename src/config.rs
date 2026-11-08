@@ -58,6 +58,7 @@ pub struct SingleAppConfig {
     pub cluster_proxy: Option<bool>,
     pub internal_port_base: Option<u16>,
     pub idle_timeout_secs: Option<u64>,
+    pub idle_mode: Option<crate::model::IdleMode>,
     pub health_check: Option<crate::model::HealthCheckConfig>,
 }
 
@@ -200,6 +201,7 @@ fn convert_single_app(single: SingleAppConfig, base_dir: Option<&Path>) -> Resul
         cluster_proxy: single.cluster_proxy,
         internal_port_base: single.internal_port_base,
         idle_timeout_secs: single.idle_timeout_secs,
+        idle_mode: single.idle_mode,
         log_rotate_max_size,
         log_rotate_keep,
         log_compress,

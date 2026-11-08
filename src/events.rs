@@ -16,6 +16,8 @@ pub enum EventType {
     MemoryLimit,
     HealthcheckFailed,
     RotatedLogs,
+    Suspended,
+    Resumed,
 }
 
 impl fmt::Display for EventType {
@@ -30,6 +32,8 @@ impl fmt::Display for EventType {
             EventType::MemoryLimit => write!(f, "memory_limit"),
             EventType::HealthcheckFailed => write!(f, "healthcheck_failed"),
             EventType::RotatedLogs => write!(f, "rotated_logs"),
+            EventType::Suspended => write!(f, "suspended"),
+            EventType::Resumed => write!(f, "resumed"),
         }
     }
 }

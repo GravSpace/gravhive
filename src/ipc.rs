@@ -5,6 +5,7 @@ use crate::model::{LogEntry, LogStreamType, TargetSelector};
 use crate::process::ProcessManager;
 use crate::protocol::{Request, Response};
 use crate::ring_buffer::LogHub;
+use crate::socket_activation::SocketActivationManager;
 use crate::wasm::WasmPluginManager;
 use anyhow::{bail, Context, Result};
 use futures::{SinkExt, StreamExt};
@@ -22,6 +23,7 @@ pub struct IpcServer {
     cron_manager: Option<CronManager>,
     wasm_manager: Option<Arc<WasmPluginManager>>,
     alert_manager: Option<AlertManager>,
+    socket_activation: Option<Arc<SocketActivationManager>>,
 }
 
 impl IpcServer {
@@ -31,6 +33,7 @@ impl IpcServer {
         cron_manager: Option<CronManager>,
         wasm_manager: Option<Arc<WasmPluginManager>>,
         alert_manager: Option<AlertManager>,
+        socket_activation: Option<Arc<SocketActivationManager>>,
     ) -> Self {
         Self {
             manager,
@@ -38,6 +41,7 @@ impl IpcServer {
             cron_manager,
             wasm_manager,
             alert_manager,
+            socket_activation,
         }
     }
 
@@ -73,10 +77,18 @@ impl IpcServer {
                     let cron_mgr = self.cron_manager.clone();
                     let wasm_mgr = self.wasm_manager.clone();
                     let alert_mgr = self.alert_manager.clone();
+                    let socket_activation = self.socket_activation.clone();
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            handle_client(stream, manager, log_hub, cron_mgr, wasm_mgr, alert_mgr)
-                                .await
+                        if let Err(e) = handle_client(
+                            stream,
+                            manager,
+                            log_hub,
+                            cron_mgr,
+                            wasm_mgr,
+                            alert_mgr,
+                            socket_activation,
+                        )
+                        .await
                         {
                             debug!("Client connection closed: {}", e);
                         }
@@ -97,6 +109,7 @@ async fn handle_client(
     cron_manager: Option<CronManager>,
     wasm_manager: Option<Arc<WasmPluginManager>>,
     alert_manager: Option<AlertManager>,
+    socket_activation: Option<Arc<SocketActivationManager>>,
 ) -> Result<()> {
     #[cfg(unix)]
     {
@@ -183,9 +196,20 @@ async fn handle_client(
                     }
                 }
 
+                let listen_p = config.listen_port;
+                let target_p = config.target_port;
+                let idle_secs = config.idle_timeout_secs;
+                let idle_m = config.idle_mode.unwrap_or_default();
+
                 let mut mgr = manager.write().await;
                 match mgr.start_app(config).await {
                     Ok(ids) => {
+                        drop(mgr);
+                        if let (Some(lp), Some(tp), Some(idle)) = (listen_p, target_p, idle_secs) {
+                            if let Some(ref sa) = socket_activation {
+                                let _ = sa.register(&app_name, lp, tp, idle, idle_m).await;
+                            }
+                        }
                         let resp = Response::Ok {
                             message: format!(
                                 "App '{}' started successfully (instances: {}, worker IDs: {:?})",

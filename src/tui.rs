@@ -210,6 +210,7 @@ fn render_ui(
                 ProcessStatus::Stopping | ProcessStatus::Restarting => Color::Yellow,
                 ProcessStatus::Stopped => Color::DarkGray,
                 ProcessStatus::Errored => Color::Red,
+                ProcessStatus::Idle => Color::Cyan,
             };
 
             let row_style = if is_selected {

@@ -28,6 +28,8 @@ pub enum ProcessStatus {
     Stopped,
     Errored,
     Restarting,
+    #[serde(alias = "suspended")]
+    Idle,
 }
 
 impl fmt::Display for ProcessStatus {
@@ -38,6 +40,24 @@ impl fmt::Display for ProcessStatus {
             ProcessStatus::Stopped => write!(f, "stopped"),
             ProcessStatus::Errored => write!(f, "errored"),
             ProcessStatus::Restarting => write!(f, "restarting"),
+            ProcessStatus::Idle => write!(f, "idle"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IdleMode {
+    #[default]
+    Freeze,
+    Kill,
+}
+
+impl fmt::Display for IdleMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IdleMode::Freeze => write!(f, "freeze"),
+            IdleMode::Kill => write!(f, "kill"),
         }
     }
 }
@@ -130,6 +150,8 @@ pub struct ProcessConfig {
     pub internal_port_base: Option<u16>,
     #[serde(default)]
     pub idle_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub idle_mode: Option<IdleMode>,
     #[serde(default)]
     pub log_rotate_max_size: Option<u64>,
     #[serde(default)]

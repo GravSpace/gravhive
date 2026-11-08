@@ -854,6 +854,7 @@ async fn main() -> Result<()> {
                                     Cell::new("stopped").fg(TableColor::DarkGrey)
                                 }
                                 ProcessStatus::Errored => Cell::new("errored").fg(TableColor::Red),
+                                ProcessStatus::Idle => Cell::new("idle").fg(TableColor::Cyan),
                             };
                             table.add_row(vec![
                                 Cell::new(p.id),
@@ -1837,6 +1838,7 @@ fn prepare_process_configs(
         cluster_proxy: None,
         internal_port_base: None,
         idle_timeout_secs: None,
+        idle_mode: None,
         log_rotate_max_size: None,
         log_rotate_keep: None,
         log_compress: true,
@@ -1933,7 +1935,9 @@ async fn run_foreground(configs: Vec<ProcessConfig>) -> Result<()> {
                     let mgr = manager.read().await;
                     let procs = mgr.list();
                     let any_alive = procs.iter().any(|p| {
-                        p.status == ProcessStatus::Online || p.status == ProcessStatus::Restarting
+                        p.status == ProcessStatus::Online
+                            || p.status == ProcessStatus::Restarting
+                            || p.status == ProcessStatus::Idle
                     });
                     if !procs.is_empty() && !any_alive {
                         println!("\n{} All child processes have exited.", "ℹ".cyan().bold());
@@ -2058,6 +2062,7 @@ async fn print_process_table(as_json: bool) -> Result<()> {
                 }
                 ProcessStatus::Stopped => Cell::new("stopped").fg(TableColor::DarkGrey),
                 ProcessStatus::Errored => Cell::new("errored").fg(TableColor::Red),
+                ProcessStatus::Idle => Cell::new("idle").fg(TableColor::Cyan),
             };
 
             table.add_row(vec![
@@ -2104,6 +2109,7 @@ fn colorize_status(status: ProcessStatus) -> ColoredString {
         ProcessStatus::Stopping | ProcessStatus::Restarting => "restarting".yellow().bold(),
         ProcessStatus::Stopped => "stopped".dimmed(),
         ProcessStatus::Errored => "errored".red().bold(),
+        ProcessStatus::Idle => "idle".cyan().bold(),
     }
 }
 
