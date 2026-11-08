@@ -184,8 +184,8 @@ impl ProcessManager {
         }
 
         if started_ids.is_empty() && instances > 0 {
-            let err = first_spawn_error
-                .unwrap_or_else(|| "Failed to spawn worker instance".to_string());
+            let err =
+                first_spawn_error.unwrap_or_else(|| "Failed to spawn worker instance".to_string());
             bail!("{}", err);
         }
 
