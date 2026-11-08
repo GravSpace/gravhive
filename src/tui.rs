@@ -77,9 +77,11 @@ async fn monit_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) ->
         let logs = recent_logs.clone();
         let s_msg = status_msg.clone();
 
-        terminal.draw(|f| {
-            render_ui(f, &procs, sel, &logs, &s_msg);
-        })?;
+        terminal
+            .draw(|f| {
+                render_ui(f, &procs, sel, &logs, &s_msg);
+            })
+            .map_err(|e| anyhow::anyhow!("Terminal draw error: {}", e))?;
 
         // Handle user keyboard events
         if event::poll(Duration::from_millis(150))? {
