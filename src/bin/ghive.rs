@@ -1743,6 +1743,101 @@ fn prepare_process_configs(
         return Ok(configs);
     }
 
+    // Direct shell command string execution (e.g. "docker restart surrealdb && /usr/bin/pm2 restart 7 8 11")
+    if gravhive::detector::contains_shell_syntax(target, &args) {
+        let app_name = name.unwrap_or_else(|| {
+            if let Some(first_word) = target.split_whitespace().next() {
+                let first_path = Path::new(first_word);
+                if let Some(stem) = first_path.file_stem().and_then(|s| s.to_str()) {
+                    return stem.to_string();
+                }
+            }
+            "app".to_string()
+        });
+
+        let (exec_mode, instance_count) = match instances.as_deref() {
+            Some("max") => {
+                let cores = std::thread::available_parallelism()
+                    .map(|p| p.get())
+                    .unwrap_or(2);
+                (ExecMode::Cluster, cores)
+            }
+            Some(num_str) => {
+                let count = num_str.parse::<usize>().unwrap_or(1);
+                if count > 1 {
+                    (ExecMode::Cluster, count)
+                } else {
+                    (ExecMode::Fork, 1)
+                }
+            }
+            None => (ExecMode::Fork, 1),
+        };
+
+        let mem_limit = max_memory_restart.as_deref().and_then(parse_memory_string);
+
+        let mut env_map = HashMap::new();
+        if let Ok(caller_path) = std::env::var("PATH") {
+            env_map.insert("PATH".to_string(), caller_path);
+        }
+        if let Some(ref path) = env_file {
+            let loaded = gravhive::env_loader::load_env_file(path)?;
+            println!(
+                "{} Loaded {} environment variables from {}",
+                "✓".green(),
+                loaded.len(),
+                path.display().to_string().bold()
+            );
+            for (k, v) in loaded {
+                env_map.insert(k, v);
+            }
+        }
+        for (k, v) in envs {
+            env_map.insert(k, v);
+        }
+
+        let final_cwd = cwd.or_else(|| std::env::current_dir().ok());
+        let clean_cmd = gravhive::detector::clean_shell_prefix(target);
+
+        let config = ProcessConfig {
+            name: app_name,
+            script: clean_cmd,
+            args,
+            cwd: final_cwd,
+            exec_mode,
+            instances: instance_count,
+            autorestart: !no_autorestart,
+            max_restarts: 15,
+            restart_delay_ms: 100,
+            max_memory_restart: mem_limit,
+            watch,
+            watch_paths: Vec::new(),
+            watch_ignore: Vec::new(),
+            env: env_map,
+            interpreter,
+            out_log: None,
+            err_log: None,
+            cron,
+            cron_timezone,
+            user: None,
+            group: None,
+            cgroup_memory_max: None,
+            cgroup_cpu_max: None,
+            cgroup_pids_max: None,
+            listen_port: None,
+            target_port: None,
+            cluster_proxy: None,
+            internal_port_base: None,
+            idle_timeout_secs: None,
+            idle_mode: None,
+            log_rotate_max_size: None,
+            log_rotate_keep: None,
+            log_compress: true,
+            health_check: None,
+        };
+
+        return Ok(vec![config]);
+    }
+
     // Single application direct execution
     let detected = detect_runtime(target, &args);
 

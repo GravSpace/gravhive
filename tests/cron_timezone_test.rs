@@ -98,3 +98,20 @@ cron = "0 2 * * *"
 
     assert_eq!(loaded_tz, Some("Asia/Jakarta".to_string()));
 }
+
+#[tokio::test]
+async fn test_cron_compound_shell_command() {
+    let hub = LogHub::new(100);
+    let cron = CronManager::new_with_timezone(hub, "UTC");
+
+    let cmd = "docker restart surrealdb && /usr/bin/pm2 restart 7 8 11";
+    cron.add_job("maintenance", "0 2 * * *", Some("Asia/Jakarta"), cmd, &[])
+        .await
+        .expect("Failed to add compound shell cron job");
+
+    let jobs = cron.list_jobs().await;
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].name, "maintenance");
+    assert_eq!(jobs[0].command, cmd);
+    assert_eq!(jobs[0].timezone, "Asia/Jakarta");
+}

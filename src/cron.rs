@@ -423,7 +423,11 @@ impl CronManager {
             .map(|j| CronJobInfo {
                 name: j.name.clone(),
                 expression: j.expression.clone(),
-                command: j.command.clone(),
+                command: if j.args.is_empty() {
+                    j.command.clone()
+                } else {
+                    format!("{} {}", j.command, j.args.join(" "))
+                },
                 last_run: j.last_run,
                 next_run: j.next_run,
                 runs_count: j.runs_count,
