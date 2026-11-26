@@ -15,6 +15,7 @@ pub mod log_rotate;
 pub mod mesh;
 pub mod metrics;
 pub mod model;
+pub mod path_utils;
 pub mod process;
 pub mod profile;
 pub mod protocol;

@@ -10,6 +10,7 @@ use gravhive::ring_buffer::LogHub;
 use gravhive::socket_activation::SocketActivationManager;
 use gravhive::wasm::WasmPluginManager;
 use gravhive::watchdog::Watchdog;
+use gravhive::watcher::FileWatcher;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -118,10 +119,15 @@ async fn main() -> Result<()> {
     let socket_activation = Arc::new(SocketActivationManager::new(manager.clone()));
     socket_activation.start_idle_checker();
 
-    // Auto-register resurrected socket activation apps if any
+    // Initialize File Watcher for --watch / binary rebuilds
+    let file_watcher = FileWatcher::new(manager.clone());
+
+    // Auto-register resurrected socket activation and watched apps if any
     {
         let mgr = manager.read().await;
-        for config in mgr.get_active_configs() {
+        let active_configs = mgr.get_active_configs();
+        file_watcher.sync_apps(&active_configs);
+        for config in active_configs {
             if let (Some(lp), Some(tp), Some(idle_secs)) = (
                 config.listen_port,
                 config.target_port,
@@ -197,7 +203,8 @@ async fn main() -> Result<()> {
         Some(wasm_manager),
         Some(alert_manager),
         Some(socket_activation),
-    );
+    )
+    .with_watcher(file_watcher);
     ipc_server.run().await?;
 
     Ok(())

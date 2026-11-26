@@ -1725,6 +1725,15 @@ fn prepare_process_configs(
         };
 
         for cfg in configs.iter_mut() {
+            cfg.cwd = gravhive::path_utils::resolve_cwd(cfg.cwd.as_deref());
+            if !gravhive::detector::contains_shell_syntax(&cfg.script, &cfg.args)
+                && !cfg.script.contains(' ')
+            {
+                cfg.script = gravhive::path_utils::resolve_lexical_path(
+                    &cfg.script,
+                    cfg.cwd.as_deref(),
+                );
+            }
             if let Ok(caller_path) = std::env::var("PATH") {
                 cfg.env.entry("PATH".to_string()).or_insert(caller_path);
             }
@@ -1892,16 +1901,7 @@ fn prepare_process_configs(
     let final_cwd = cwd.or_else(|| std::env::current_dir().ok());
     let final_interpreter = interpreter.or(detected.interpreter);
 
-    let script_path = Path::new(&detected.script);
-    let final_script = if script_path.exists() {
-        if let Ok(abs) = script_path.canonicalize() {
-            abs.to_string_lossy().to_string()
-        } else {
-            detected.script
-        }
-    } else {
-        detected.script
-    };
+    let final_script = gravhive::path_utils::resolve_lexical_path(&detected.script, None);
 
     let config = ProcessConfig {
         name: app_name,
@@ -1968,13 +1968,17 @@ async fn run_foreground(configs: Vec<ProcessConfig>) -> Result<()> {
     });
 
     let manager = Arc::new(RwLock::new(ProcessManager::new(log_hub)));
+    let file_watcher = gravhive::watcher::FileWatcher::new(manager.clone());
 
     for cfg in configs {
         let app_name = cfg.name.clone();
         let instances = cfg.instances;
+        let watch_cfg = cfg.clone();
         let mut mgr = manager.write().await;
         match mgr.start_app(cfg).await {
             Ok(ids) => {
+                drop(mgr);
+                file_watcher.register_app(&watch_cfg);
                 println!(
                     "{} App '{}' ({} instance{}) running in foreground with IDs: {:?}",
                     "✓".green().bold(),

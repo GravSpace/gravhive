@@ -7,6 +7,7 @@ use crate::protocol::{Request, Response};
 use crate::ring_buffer::LogHub;
 use crate::socket_activation::SocketActivationManager;
 use crate::wasm::WasmPluginManager;
+use crate::watcher::FileWatcher;
 use anyhow::{bail, Context, Result};
 use futures::{SinkExt, StreamExt};
 use std::fs;
@@ -24,6 +25,7 @@ pub struct IpcServer {
     wasm_manager: Option<Arc<WasmPluginManager>>,
     alert_manager: Option<AlertManager>,
     socket_activation: Option<Arc<SocketActivationManager>>,
+    watcher: Option<FileWatcher>,
 }
 
 impl IpcServer {
@@ -42,7 +44,13 @@ impl IpcServer {
             wasm_manager,
             alert_manager,
             socket_activation,
+            watcher: None,
         }
+    }
+
+    pub fn with_watcher(mut self, watcher: FileWatcher) -> Self {
+        self.watcher = Some(watcher);
+        self
     }
 
     pub async fn run(self) -> Result<()> {
@@ -78,6 +86,7 @@ impl IpcServer {
                     let wasm_mgr = self.wasm_manager.clone();
                     let alert_mgr = self.alert_manager.clone();
                     let socket_activation = self.socket_activation.clone();
+                    let watcher = self.watcher.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(
                             stream,
@@ -87,6 +96,7 @@ impl IpcServer {
                             wasm_mgr,
                             alert_mgr,
                             socket_activation,
+                            watcher,
                         )
                         .await
                         {
@@ -102,6 +112,10 @@ impl IpcServer {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "IPC handler dispatches across all daemon subsystem handles"
+)]
 async fn handle_client(
     stream: UnixStream,
     manager: Arc<RwLock<ProcessManager>>,
@@ -110,6 +124,7 @@ async fn handle_client(
     wasm_manager: Option<Arc<WasmPluginManager>>,
     alert_manager: Option<AlertManager>,
     socket_activation: Option<Arc<SocketActivationManager>>,
+    watcher: Option<FileWatcher>,
 ) -> Result<()> {
     #[cfg(unix)]
     {
@@ -163,13 +178,19 @@ async fn handle_client(
 
                 if let Some(ref expr) = config.cron {
                     if let Some(ref cron) = cron_manager {
+                        let ctx = crate::cron::CronExecutionContext {
+                            cwd: config.cwd.clone(),
+                            env: config.env.clone(),
+                            interpreter: config.interpreter.clone(),
+                        };
                         match cron
-                            .add_job(
+                            .add_job_with_context(
                                 &app_name,
                                 expr,
                                 config.cron_timezone.as_deref(),
                                 &config.script,
                                 &config.args,
+                                ctx,
                             )
                             .await
                         {
@@ -200,11 +221,15 @@ async fn handle_client(
                 let target_p = config.target_port;
                 let idle_secs = config.idle_timeout_secs;
                 let idle_m = config.idle_mode.unwrap_or_default();
+                let watch_cfg = config.clone();
 
                 let mut mgr = manager.write().await;
                 match mgr.start_app(config).await {
                     Ok(ids) => {
                         drop(mgr);
+                        if let Some(ref w) = watcher {
+                            w.register_app(&watch_cfg);
+                        }
                         if let (Some(lp), Some(tp), Some(idle)) = (listen_p, target_p, idle_secs) {
                             if let Some(ref sa) = socket_activation {
                                 let _ = sa.register(&app_name, lp, tp, idle, idle_m).await;
@@ -355,6 +380,9 @@ async fn handle_client(
                 match mgr.delete(&target, Duration::from_millis(5000)).await {
                     Ok(count) => {
                         if count > 0 {
+                            if let Some(ref w) = watcher {
+                                w.sync_apps(&mgr.get_active_configs());
+                            }
                             let resp = Response::Ok {
                                 message: format!(
                                     "Deleted {} process(es) matching {}",
@@ -506,6 +534,9 @@ async fn handle_client(
                 let path = crate::common::state_file_path();
                 let mut mgr = manager.write().await;
                 let proc_res = mgr.resurrect_state(&path).await;
+                if let Some(ref w) = watcher {
+                    w.sync_apps(&mgr.get_active_configs());
+                }
                 drop(mgr);
 
                 let cron_count = if let Some(ref cron) = cron_manager {
