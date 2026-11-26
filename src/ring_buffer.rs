@@ -65,27 +65,27 @@ impl LogHub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     #[test]
     fn test_ring_buffer_cron_filtering() {
         let hub = LogHub::new(50);
         hub.push(LogEntry {
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             app_name: "web-api".to_string(),
             worker_id: 0,
             stream: "out".to_string(),
             message: "Listening on :3000".to_string(),
         });
         hub.push(LogEntry {
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             app_name: "cron:backup".to_string(),
             worker_id: 0,
             stream: "out".to_string(),
             message: "Backup DB created".to_string(),
         });
         hub.push(LogEntry {
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             app_name: "cron:cleanup".to_string(),
             worker_id: 0,
             stream: "err".to_string(),

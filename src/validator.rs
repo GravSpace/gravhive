@@ -158,7 +158,7 @@ impl ConfigValidator {
                     cron_expr.to_string()
                 };
 
-                match cron::Schedule::from_str(&normalized) {
+                match jiff_cron::Schedule::from_str(&normalized) {
                     Ok(_) => {}
                     Err(e) => {
                         report.errors.push(format!(

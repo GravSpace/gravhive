@@ -1,10 +1,10 @@
-use chrono::{DateTime, Utc};
-use cron::Schedule;
+use anyhow::{Context, Result};
+use jiff::Timestamp;
+use jiff_cron::Schedule;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use anyhow::{Context, Result};
 
 pub const DEFAULT_CRON_TIMEOUT: Duration = Duration::from_secs(1800); // 30 minutes
 pub const MAX_CRON_LOG_CAPTURE_BYTES: usize = 65536; // 64 KB limit to prevent memory bloat
@@ -82,8 +82,8 @@ pub struct CronJobInfo {
     pub name: String,
     pub expression: String,
     pub command: String,
-    pub last_run: Option<DateTime<Utc>>,
-    pub next_run: Option<DateTime<Utc>>,
+    pub last_run: Option<Timestamp>,
+    pub next_run: Option<Timestamp>,
     pub runs_count: u64,
     pub last_status: String,
     #[serde(default)]
@@ -101,8 +101,8 @@ pub struct CronJob {
     pub command: String,
     pub args: Vec<String>,
     pub context: CronExecutionContext,
-    pub last_run: Option<DateTime<Utc>>,
-    pub next_run: Option<DateTime<Utc>>,
+    pub last_run: Option<Timestamp>,
+    pub next_run: Option<Timestamp>,
     pub runs_count: u64,
     pub last_status: String,
     pub paused: bool,

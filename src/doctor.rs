@@ -181,7 +181,7 @@ impl Doctor {
                             status: DiagnosticStatus::Pass,
                             message: format!(
                                 "Configured timezone: {} (valid IANA timezone)",
-                                tz.name()
+                                tz.iana_name().unwrap_or(&cfg.timezone)
                             ),
                             recommendation: None,
                         }

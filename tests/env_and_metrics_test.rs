@@ -1,7 +1,7 @@
-use chrono::Utc;
 use gravhive::env_loader::parse_env_str;
 use gravhive::metrics::render_prometheus_metrics;
 use gravhive::model::{ExecMode, ProcessItem, ProcessStatus};
+use jiff::Timestamp;
 
 #[test]
 fn test_env_loader_parsing_and_injection() {
@@ -45,7 +45,7 @@ fn test_prometheus_metrics_output_conformance() {
             restarts: 0,
             cpu_percent: 1.25,
             memory_bytes: 32_000_000,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         },
         ProcessItem {
             id: 1,
@@ -58,7 +58,7 @@ fn test_prometheus_metrics_output_conformance() {
             restarts: 3,
             cpu_percent: 0.0,
             memory_bytes: 0,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         },
     ];
 

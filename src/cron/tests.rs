@@ -146,8 +146,7 @@ async fn test_cron_spawn_failure_records_error() {
 
 #[tokio::test]
 async fn test_cron_persistence_to_disk() {
-    let cron_file =
-        std::env::temp_dir().join(format!("test-cron-{}.json", rand::random::<u64>()));
+    let cron_file = std::env::temp_dir().join(format!("test-cron-{}.json", rand::random::<u64>()));
 
     let hub = LogHub::new(10);
     let cron1 = CronManager::new_with_timezone(hub.clone(), "Asia/Jakarta");
@@ -253,9 +252,16 @@ async fn test_cron_executes_with_cwd_env_and_rebuilt_executable() {
         interpreter: None,
     };
 
-    cron.add_job_with_context("rebuild-job", "0 0 1 * * *", None, "./target/release/demo_app", &[], ctx.clone())
-        .await
-        .unwrap();
+    cron.add_job_with_context(
+        "rebuild-job",
+        "0 0 1 * * *",
+        None,
+        "./target/release/demo_app",
+        &[],
+        ctx.clone(),
+    )
+    .await
+    .unwrap();
 
     // Execute v1
     runner::run_single_job(
@@ -289,12 +295,16 @@ async fn test_cron_executes_with_cwd_env_and_rebuilt_executable() {
     let messages: Vec<&str> = logs.iter().map(|l| l.message.as_str()).collect();
     let expected_suffix = root.canonicalize().unwrap().to_string_lossy().to_string();
     assert!(
-        messages.iter().any(|m| m.starts_with("v1:ok:") && m.ends_with(&expected_suffix)),
+        messages
+            .iter()
+            .any(|m| m.starts_with("v1:ok:") && m.ends_with(&expected_suffix)),
         "Expected v1 log with cwd and env, got: {:?}",
         messages
     );
     assert!(
-        messages.iter().any(|m| m.starts_with("v2:ok:") && m.ends_with(&expected_suffix)),
+        messages
+            .iter()
+            .any(|m| m.starts_with("v2:ok:") && m.ends_with(&expected_suffix)),
         "Expected v2 log after rebuild, got: {:?}",
         messages
     );

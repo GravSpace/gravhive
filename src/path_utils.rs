@@ -40,7 +40,9 @@ pub fn resolve_cwd(dir: Option<&Path>) -> Option<PathBuf> {
     match dir {
         Some(p) if !p.as_os_str().is_empty() => {
             if p.is_absolute() {
-                std::path::absolute(p).ok().or_else(|| Some(p.to_path_buf()))
+                std::path::absolute(p)
+                    .ok()
+                    .or_else(|| Some(p.to_path_buf()))
             } else {
                 let base = std::env::current_dir().ok()?;
                 let joined = base.join(p);

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -212,7 +212,7 @@ pub struct ProcessItem {
     pub restarts: u32,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,7 +225,7 @@ pub enum LogStreamType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     pub app_name: String,
     pub worker_id: u32,
     pub stream: String,

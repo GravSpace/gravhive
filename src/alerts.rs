@@ -251,7 +251,7 @@ impl AlertManager {
                 format!(
                     "{}\nTriggered at: {}",
                     message,
-                    chrono::Utc::now().to_rfc3339()
+                    jiff::Timestamp::now()
                 ),
                 false,
             ),
@@ -268,7 +268,7 @@ impl AlertManager {
                     "title": title,
                     "description": message,
                     "color": color,
-                    "timestamp": chrono::Utc::now().to_rfc3339()
+                    "timestamp": jiff::Timestamp::now().to_string()
                 }]
             });
 

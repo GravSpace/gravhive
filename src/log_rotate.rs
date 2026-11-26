@@ -141,15 +141,15 @@ pub fn compress_file_gzip(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use flate2::read::GzDecoder;
+    use jiff::Timestamp;
     use std::io::Read;
 
     #[test]
     fn test_log_rotation_and_gzip() {
         let temp_dir = std::env::temp_dir().join(format!(
             "ghive_test_logrotate_{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+            Timestamp::now().as_nanosecond()
         ));
         let _ = fs::create_dir_all(&temp_dir);
         let log_file = temp_dir.join("test-app-out.log");
@@ -186,7 +186,7 @@ mod tests {
     fn test_symlink_rotation_rejected() {
         let temp_dir = std::env::temp_dir().join(format!(
             "ghive_test_logrotate_symlink_{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+            Timestamp::now().as_nanosecond()
         ));
         let _ = fs::create_dir_all(&temp_dir);
         let real_file = temp_dir.join("real_target.txt");

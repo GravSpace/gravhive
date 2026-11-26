@@ -60,10 +60,16 @@ impl FileWatcher {
                 if let Ok(mut guard) = self.watchers.lock() {
                     guard.insert(config.name.clone(), w);
                 }
-                info!("[WATCH] Watching '{}' for rebuild/file changes", config.name);
+                info!(
+                    "[WATCH] Watching '{}' for rebuild/file changes",
+                    config.name
+                );
             }
             Err(e) => {
-                warn!("[WATCH] Failed to start watcher for '{}': {}", config.name, e);
+                warn!(
+                    "[WATCH] Failed to start watcher for '{}': {}",
+                    config.name, e
+                );
             }
         }
     }
@@ -117,11 +123,22 @@ impl WatchSpec {
         let mut explicit_names = HashSet::new();
         let mut seen_dirs = HashSet::new();
 
-        let script_cmd = config.script.split_whitespace().next().unwrap_or(&config.script);
-        let resolved_script = PathBuf::from(resolve_lexical_path(script_cmd, config.cwd.as_deref()));
+        let script_cmd = config
+            .script
+            .split_whitespace()
+            .next()
+            .unwrap_or(&config.script);
+        let resolved_script =
+            PathBuf::from(resolve_lexical_path(script_cmd, config.cwd.as_deref()));
 
         if config.watch_paths.is_empty() {
-            add_path_target(&resolved_script, &mut targets, &mut explicit_files, &mut explicit_names, &mut seen_dirs);
+            add_path_target(
+                &resolved_script,
+                &mut targets,
+                &mut explicit_files,
+                &mut explicit_names,
+                &mut seen_dirs,
+            );
             if is_interpreted_script(&resolved_script) {
                 if let Some(ref cwd) = config.cwd {
                     if cwd.is_dir() && seen_dirs.insert(cwd.clone()) {
@@ -135,7 +152,13 @@ impl WatchSpec {
                     &wp.to_string_lossy(),
                     config.cwd.as_deref(),
                 ));
-                add_path_target(&resolved, &mut targets, &mut explicit_files, &mut explicit_names, &mut seen_dirs);
+                add_path_target(
+                    &resolved,
+                    &mut targets,
+                    &mut explicit_files,
+                    &mut explicit_names,
+                    &mut seen_dirs,
+                );
             }
         }
 
@@ -309,7 +332,11 @@ async fn trigger_app_reload(
     let mut mgr = manager.write().await;
     if mode == ExecMode::Cluster
         && mgr
-            .reload(&selector, Duration::from_millis(3000), Duration::from_millis(80))
+            .reload(
+                &selector,
+                Duration::from_millis(3000),
+                Duration::from_millis(80),
+            )
             .await
             .is_ok()
     {

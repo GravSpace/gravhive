@@ -207,7 +207,7 @@ pub async fn start_metrics_server(host: &str, port: u16) -> Result<()> {
 mod tests {
     use super::*;
     use crate::model::ExecMode;
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     #[test]
     fn test_render_prometheus_metrics_daemon_down() {
@@ -230,7 +230,7 @@ mod tests {
             restarts: 1,
             cpu_percent: 2.5,
             memory_bytes: 52428800,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         };
 
         let output = render_prometheus_metrics(&[p], true);

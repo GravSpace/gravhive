@@ -5,15 +5,15 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-pub use timezone::{append_cron_log, resolve_timezone};
+pub use timezone::{append_cron_log, format_timezone_offset, resolve_timezone};
 pub use types::{
     default_timezone_str, CronConfig, CronExecutionContext, CronJob, CronJobInfo, CronJobRecord,
     DEFAULT_CRON_TIMEOUT, MAX_CRON_LOG_CAPTURE_BYTES,
 };
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use cron::Schedule;
+use jiff::Timestamp;
+use jiff_cron::Schedule;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -36,8 +36,9 @@ impl CronManager {
 
     pub fn new_with_timezone(log_hub: LogHubProxy, default_tz: &str) -> Self {
         let canonical_tz = resolve_timezone(default_tz)
-            .map(|tz| tz.name().to_string())
-            .unwrap_or_else(|_| "UTC".to_string());
+            .ok()
+            .and_then(|tz| tz.iana_name().map(str::to_string))
+            .unwrap_or_else(|| "UTC".to_string());
         Self {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             default_timezone: Arc::new(RwLock::new(canonical_tz)),
@@ -48,7 +49,7 @@ impl CronManager {
     pub async fn get_timezone(&self) -> (String, String) {
         let tz_name = self.default_timezone.read().await.clone();
         let offset = if let Ok(tz) = resolve_timezone(&tz_name) {
-            Utc::now().with_timezone(&tz).format("%:z").to_string()
+            format_timezone_offset(&tz)
         } else {
             "+00:00".to_string()
         };
@@ -57,8 +58,8 @@ impl CronManager {
 
     pub async fn set_default_timezone(&self, tz_str: &str) -> Result<(String, String)> {
         let tz = resolve_timezone(tz_str)?;
-        let canonical_tz = tz.name().to_string();
-        let offset = Utc::now().with_timezone(&tz).format("%:z").to_string();
+        let canonical_tz = tz.iana_name().unwrap_or("UTC").to_string();
+        let offset = format_timezone_offset(&tz);
 
         *self.default_timezone.write().await = canonical_tz.clone();
 
@@ -113,7 +114,7 @@ impl CronManager {
         };
 
         if let Ok(tz) = resolve_timezone(&cfg.timezone) {
-            *self.default_timezone.write().await = tz.name().to_string();
+            *self.default_timezone.write().await = tz.iana_name().unwrap_or("UTC").to_string();
         }
 
         let mut count = 0;
@@ -142,7 +143,7 @@ impl CronManager {
         Ok(count)
     }
 
-    pub fn calculate_next_run(schedule: &Schedule, tz_str: &str) -> Option<DateTime<Utc>> {
+    pub fn calculate_next_run(schedule: &Schedule, tz_str: &str) -> Option<Timestamp> {
         timezone::calculate_next_run(schedule, tz_str)
     }
 
@@ -169,7 +170,7 @@ impl CronManager {
         let canonical_tz_override = if let Some(tz_str) = tz_override {
             let tz = resolve_timezone(tz_str)
                 .with_context(|| format!("Invalid cron timezone '{}'", tz_str))?;
-            Some(tz.name().to_string())
+            Some(tz.iana_name().unwrap_or(tz_str.trim()).to_string())
         } else {
             None
         };

@@ -32,9 +32,7 @@ ratatui = "0.30"
 crossterm = "0.28"
 nix = { version = "0.29", features = ["signal", "process", "user", "resource"] }
 libc = "0.2"
-chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = { version = "0.10", features = ["serde", "case-insensitive"] }
-iana-time-zone = "0.1"
+jiff = { version = "1.0", features = ["serde"] }
 anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
@@ -46,7 +44,7 @@ bytes = "1.10"
 futures = "0.3"
 async-trait = "0.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
-cron = "0.17.0"
+jiff-cron = "0.3"
 wasmi = "2.0.0"
 aes-gcm = "0.11.1"
 rand = "0.8"

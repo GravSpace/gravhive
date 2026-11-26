@@ -809,7 +809,7 @@ async fn main() -> Result<()> {
                         Cell::new(format!("{:.1}%", n.cpu_percent)),
                         Cell::new(format_memory_bytes(n.memory_bytes)),
                         Cell::new(n.processes_count),
-                        Cell::new(n.last_seen.format("%H:%M:%S").to_string()),
+                        Cell::new(n.last_seen.strftime("%H:%M:%S").to_string()),
                         status_cell,
                     ]);
                 }
@@ -998,12 +998,12 @@ async fn main() -> Result<()> {
                             } else {
                                 j.next_run
                                     .map(|d| {
-                                        if let Some(tz) = tz_resolved {
-                                            d.with_timezone(&tz)
-                                                .format("%Y-%m-%d %H:%M:%S")
+                                        if let Some(ref tz) = tz_resolved {
+                                            d.to_zoned_datetime(tz.clone())
+                                                .strftime("%Y-%m-%d %H:%M:%S")
                                                 .to_string()
                                         } else {
-                                            d.format("%Y-%m-%d %H:%M:%S").to_string()
+                                            d.strftime("%Y-%m-%d %H:%M:%S").to_string()
                                         }
                                     })
                                     .unwrap_or("-".into())
@@ -1011,10 +1011,12 @@ async fn main() -> Result<()> {
                             let last_str = j
                                 .last_run
                                 .map(|d| {
-                                    if let Some(tz) = tz_resolved {
-                                        d.with_timezone(&tz).format("%Y-%m-%d %H:%M:%S").to_string()
+                                    if let Some(ref tz) = tz_resolved {
+                                        d.to_zoned_datetime(tz.clone())
+                                            .strftime("%Y-%m-%d %H:%M:%S")
+                                            .to_string()
                                     } else {
-                                        d.format("%Y-%m-%d %H:%M:%S").to_string()
+                                        d.strftime("%Y-%m-%d %H:%M:%S").to_string()
                                     }
                                 })
                                 .unwrap_or("-".into());
@@ -1106,7 +1108,7 @@ async fn main() -> Result<()> {
                             "{} {} [{}] {}",
                             entry
                                 .timestamp
-                                .format("%Y-%m-%d %H:%M:%S")
+                                .strftime("%Y-%m-%d %H:%M:%S")
                                 .to_string()
                                 .dimmed(),
                             stream_tag,
@@ -1314,7 +1316,7 @@ async fn main() -> Result<()> {
                         "{} {} [{}#{}] {}",
                         entry
                             .timestamp
-                            .format("%Y-%m-%d %H:%M:%S")
+                            .strftime("%Y-%m-%d %H:%M:%S")
                             .to_string()
                             .dimmed(),
                         stream_tag,
@@ -1461,7 +1463,7 @@ async fn main() -> Result<()> {
             };
 
             let out_path = output.unwrap_or_else(|| {
-                let ts = chrono::Utc::now().timestamp();
+                let ts = jiff::Timestamp::now().as_second();
                 PathBuf::from(format!("profile-{}-{}.svg", app_name, ts))
             });
 
@@ -1643,7 +1645,7 @@ async fn main() -> Result<()> {
                         _ => Cell::new(e.event_type).fg(TableColor::Yellow),
                     };
                     table.add_row(vec![
-                        Cell::new(e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()),
+                        Cell::new(e.timestamp.strftime("%Y-%m-%d %H:%M:%S").to_string()),
                         Cell::new(e.app_name),
                         Cell::new(
                             e.worker_id
@@ -1729,10 +1731,8 @@ fn prepare_process_configs(
             if !gravhive::detector::contains_shell_syntax(&cfg.script, &cfg.args)
                 && !cfg.script.contains(' ')
             {
-                cfg.script = gravhive::path_utils::resolve_lexical_path(
-                    &cfg.script,
-                    cfg.cwd.as_deref(),
-                );
+                cfg.script =
+                    gravhive::path_utils::resolve_lexical_path(&cfg.script, cfg.cwd.as_deref());
             }
             if let Ok(caller_path) = std::env::var("PATH") {
                 cfg.env.entry("PATH".to_string()).or_insert(caller_path);

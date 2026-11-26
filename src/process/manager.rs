@@ -4,7 +4,7 @@ use crate::model::{ExecMode, LogEntry, ProcessConfig, ProcessItem, ProcessStatus
 use crate::process::worker::Worker;
 use crate::ring_buffer::LogHub;
 use anyhow::{bail, Context, Result};
-use chrono::Utc;
+use jiff::Timestamp;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -132,7 +132,7 @@ impl ProcessManager {
                 );
                 worker.status = ProcessStatus::Errored;
                 self.log_hub.push(LogEntry {
-                    timestamp: Utc::now(),
+                    timestamp: Timestamp::now(),
                     app_name: app_name.clone(),
                     worker_id: id,
                     stream: "err".to_string(),
@@ -581,7 +581,7 @@ impl ProcessManager {
             .log_hub
             .get_recent(Some(&worker.app_name), 20)
             .into_iter()
-            .map(|l| format!("[{}] {}", l.timestamp.format("%H:%M:%S"), l.message))
+            .map(|l| format!("[{}] {}", l.timestamp.strftime("%H:%M:%S"), l.message))
             .collect();
 
         Some((item, worker.config.clone(), logs))
@@ -663,7 +663,7 @@ impl ProcessManager {
                             };
 
                             self.log_hub.push(LogEntry {
-                                timestamp: Utc::now(),
+                                timestamp: Timestamp::now(),
                                 app_name: app_name.clone(),
                                 worker_id,
                                 stream: if is_success {

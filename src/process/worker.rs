@@ -2,7 +2,7 @@ use crate::detector::detect_runtime;
 use crate::model::{ExecMode, LogEntry, ProcessConfig, ProcessStatus};
 use crate::ring_buffer::LogHub;
 use anyhow::{Context, Result};
-use chrono::Utc;
+use jiff::Timestamp;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use std::fs::OpenOptions;
@@ -24,8 +24,8 @@ pub struct Worker {
     pub config: ProcessConfig,
     pub status: ProcessStatus,
     pub pid: Option<u32>,
-    pub created_at: chrono::DateTime<Utc>,
-    pub start_time: Option<chrono::DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub start_time: Option<Timestamp>,
     pub restarts: u32,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
@@ -49,7 +49,7 @@ impl Worker {
             config,
             status: ProcessStatus::Stopped,
             pid: None,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
             start_time: None,
             restarts: 0,
             cpu_percent: 0.0,
@@ -177,7 +177,7 @@ impl Worker {
         let pid = child.id().unwrap_or(0);
         self.pid = Some(pid);
         self.status = ProcessStatus::Online;
-        self.start_time = Some(Utc::now());
+        self.start_time = Some(Timestamp::now());
 
         // Apply cgroups v2 if configured
         if self.config.cgroup_memory_max.is_some()
@@ -224,7 +224,7 @@ impl Worker {
                 let mut reader = BufReader::new(pipe).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     let entry = LogEntry {
-                        timestamp: Utc::now(),
+                        timestamp: Timestamp::now(),
                         app_name: app_name_c.clone(),
                         worker_id,
                         stream: "out".to_string(),
@@ -248,7 +248,7 @@ impl Worker {
                         .append(true)
                         .open(&out_file_c)
                     {
-                        let _ = writeln!(f, "[{}] {}", Utc::now().to_rfc3339(), line);
+                        let _ = writeln!(f, "[{}] {}", Timestamp::now(), line);
                     }
                 }
             });
@@ -263,7 +263,7 @@ impl Worker {
                 let mut reader = BufReader::new(pipe).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     let entry = LogEntry {
-                        timestamp: Utc::now(),
+                        timestamp: Timestamp::now(),
                         app_name: app_name_c.clone(),
                         worker_id,
                         stream: "err".to_string(),
@@ -287,7 +287,7 @@ impl Worker {
                         .append(true)
                         .open(&err_file_c)
                     {
-                        let _ = writeln!(f, "[{}] {}", Utc::now().to_rfc3339(), line);
+                        let _ = writeln!(f, "[{}] {}", Timestamp::now(), line);
                     }
                 }
             });
@@ -425,9 +425,8 @@ impl Worker {
             return 0;
         }
         if let Some(start) = self.start_time {
-            let now = Utc::now();
-            let duration = now.signed_duration_since(start);
-            duration.num_seconds().max(0) as u64
+            let now = Timestamp::now();
+            now.as_second().saturating_sub(start.as_second()).max(0) as u64
         } else {
             0
         }

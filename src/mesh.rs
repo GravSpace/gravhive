@@ -1,7 +1,7 @@
 use crate::model::ProcessItem;
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ pub struct NodeInfo {
     pub cpu_percent: f32,
     pub memory_bytes: u64,
     pub processes_count: usize,
-    pub last_seen: DateTime<Utc>,
+    pub last_seen: Timestamp,
     pub status: String,
 }
 
@@ -99,11 +99,10 @@ impl MeshCoordinator {
             let mut ticker = tokio::time::interval(Duration::from_secs(5));
             loop {
                 ticker.tick().await;
-                let now = Utc::now();
+                let now = Timestamp::now();
                 let mut lock = nodes_clone.write().await;
                 for (info, _) in lock.values_mut() {
-                    let diff = now.signed_duration_since(info.last_seen);
-                    if diff.num_seconds() > 15 {
+                    if now.as_second() - info.last_seen.as_second() > 15 {
                         info.status = "offline".to_string();
                     } else {
                         info.status = "online".to_string();
@@ -164,7 +163,7 @@ impl MeshCoordinator {
                         cpu_percent: 0.0,
                         memory_bytes: 0,
                         processes_count: 0,
-                        last_seen: Utc::now(),
+                        last_seen: Timestamp::now(),
                         status: "online".to_string(),
                     };
 
@@ -196,7 +195,7 @@ impl MeshCoordinator {
                             info.cpu_percent = cpu;
                             info.memory_bytes = mem;
                             info.processes_count = processes.len();
-                            info.last_seen = Utc::now();
+                            info.last_seen = Timestamp::now();
                             info.status = "online".to_string();
                             *procs = processes;
                         } else {
@@ -208,7 +207,7 @@ impl MeshCoordinator {
                                 cpu_percent: cpu,
                                 memory_bytes: mem,
                                 processes_count: processes.len(),
-                                last_seen: Utc::now(),
+                                last_seen: Timestamp::now(),
                                 status: "online".to_string(),
                             };
                             lock.insert(name, (node_info, processes));

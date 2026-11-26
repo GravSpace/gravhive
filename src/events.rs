@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt;
@@ -40,7 +40,7 @@ impl fmt::Display for EventType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LifecycleEvent {
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     pub app_name: String,
     pub worker_id: Option<u32>,
     pub event_type: EventType,
@@ -77,7 +77,7 @@ impl EventJournal {
         details: &str,
     ) {
         self.record(LifecycleEvent {
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             app_name: app_name.to_string(),
             worker_id,
             event_type,

@@ -5,7 +5,7 @@ use crate::cron::types::{
 use crate::detector::{detect_runtime, DetectedExecution};
 use crate::model::LogEntry;
 use crate::ring_buffer::LogHub;
-use chrono::Utc;
+use jiff::Timestamp;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,7 +91,7 @@ async fn collect_due_jobs(
     jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
     default_timezone: &Arc<RwLock<String>>,
 ) -> Vec<(String, String, Vec<String>, CronExecutionContext)> {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let default_tz = default_timezone.read().await.clone();
     let mut to_run = Vec::new();
     let mut lock = jobs.write().await;
@@ -210,7 +210,7 @@ fn truncate_lossy(bytes: &[u8]) -> String {
 
 fn push_cron_log(log_hub: &LogHub, name: &str, stream: &str, message: &str) {
     log_hub.push(LogEntry {
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
         app_name: format!("cron:{}", name),
         worker_id: 0,
         stream: stream.to_string(),
